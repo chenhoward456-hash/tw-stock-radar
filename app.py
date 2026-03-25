@@ -53,6 +53,7 @@ page = st.sidebar.radio("功能", [
     "🔍 個股分析",
     "📡 觀察清單掃描",
     "⚔ 股票 PK",
+    "💼 持倉監控",
     "🔥 題材趨勢",
     "📈 歷史回測",
     "📋 訊號追蹤",
@@ -309,6 +310,92 @@ elif page == "⚔ 股票 PK":
             st.success(f"📊 {nb} 條件明顯較優（{avg_b} vs {avg_a}）")
         else:
             st.info(f"📊 兩檔條件相近（{avg_a} vs {avg_b}）")
+
+
+# ===== 持倉監控 =====
+elif page == "💼 持倉監控":
+    st.title("💼 持倉監控")
+
+    from holdings import HOLDINGS
+    import correlation
+
+    if not HOLDINGS:
+        st.info("你還沒有設定持倉。請到 `holdings.py` 加入你的持股。")
+        st.code('''# 範例：
+HOLDINGS = [
+    {"stock_id": "2330", "buy_price": 1850, "shares": 100, "buy_date": "2026-03-20"},
+    {"stock_id": "2357", "buy_price": 560, "shares": 200, "buy_date": "2026-03-25"},
+]''', language="python")
+    else:
+        if st.button("檢查持倉", type="primary", use_container_width=True):
+            from monitor import check_holding
+
+            progress = st.progress(0, text="檢查中...")
+            results = []
+
+            for i, h in enumerate(HOLDINGS):
+                progress.progress((i + 1) / len(HOLDINGS), text=f"檢查 {h['stock_id']}...")
+                try:
+                    r = check_holding(h)
+                    results.append(r)
+                except Exception:
+                    pass
+                time.sleep(0.3)
+
+            progress.empty()
+
+            if results:
+                # 總覽
+                total_cost = sum(r["buy_price"] * r["shares"] for r in results)
+                total_value = sum(r["current_price"] * r["shares"] for r in results if r["current_price"] > 0)
+                total_pnl = total_value - total_cost
+                total_pct = (total_value / total_cost - 1) * 100 if total_cost > 0 else 0
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("持倉總值", f"{total_value:,.0f} 元")
+                with c2:
+                    st.metric("總損益", f"{total_pnl:+,.0f} 元", f"{total_pct:+.1f}%")
+                with c3:
+                    alerts_count = sum(1 for r in results if r["warnings"])
+                    if alerts_count > 0:
+                        st.metric("需注意", f"{alerts_count} 檔", delta=f"-{alerts_count}", delta_color="inverse")
+                    else:
+                        st.metric("狀態", "✅ 全部正常")
+
+                # 各持倉狀況
+                for r in results:
+                    emoji = "🚨" if r["warnings"] else "✅"
+                    with st.expander(f"{emoji} {r['stock_id']} {r['name']}（{r['avg']}/10）損益 {r['pnl_pct']:+.1f}%"):
+                        hc1, hc2, hc3, hc4 = st.columns(4)
+                        with hc1:
+                            st.metric("現價", f"{r['current_price']:.0f}")
+                        with hc2:
+                            st.metric("買入價", f"{r['buy_price']:.0f}")
+                        with hc3:
+                            st.metric("損益", f"{r['pnl_pct']:+.1f}%")
+                        with hc4:
+                            st.metric("評分", f"{r['avg']}/10")
+
+                        if r["warnings"]:
+                            for w in r["warnings"]:
+                                st.warning(w)
+
+                # 關聯性分析
+                if len(results) >= 2:
+                    st.markdown("### 🔗 持倉關聯性分析")
+                    stock_ids = [r["stock_id"] for r in results]
+
+                    with st.spinner("計算關聯性..."):
+                        div = correlation.check_diversification(stock_ids, TOKEN)
+
+                    for d in div["details"]:
+                        if d.strip():
+                            st.caption(d)
+
+                    if not div["matrix"].empty:
+                        st.markdown("**相關係數矩陣**（越接近 1 = 越容易同漲同跌）")
+                        st.dataframe(div["matrix"], use_container_width=True)
 
 
 # ===== 題材趨勢 =====
