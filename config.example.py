@@ -1,0 +1,11 @@
+"""
+設定檔範例 — 複製此檔案為 config.py，填入你的密鑰
+"""
+FINMIND_TOKEN = ""
+TOTAL_BUDGET = 0
+LINE_CHANNEL_ACCESS_TOKEN = ""
+LINE_USER_ID = ""
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+ANTHROPIC_API_KEY = ""
+LINE_CHANNEL_SECRET = ""
