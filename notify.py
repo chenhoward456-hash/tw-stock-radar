@@ -118,6 +118,9 @@ def run_scan(token=None):
                 "stock_id": stock_id,
                 "name": name,
                 "sector": stock_sectors[stock_id],
+                "tech": tech["score"],
+                "fund": fund["score"],
+                "inst": inst["score"],
                 "avg": avg,
                 "overall": overall,
             })
@@ -129,6 +132,15 @@ def run_scan(token=None):
             time.sleep(0.3)
 
     results.sort(key=lambda x: x["avg"], reverse=True)
+
+    # 自動儲存訊號記錄
+    try:
+        import tracker
+        filepath = tracker.save_scan(results)
+        print(f"\n  📝 訊號已記錄：{filepath}")
+    except Exception:
+        pass
+
     return results
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 臺股雷達 — 網頁儀表板
-啟動：streamlit run app.py
+啟動：python3 -m streamlit run app.py
 """
 import sys
 import os
@@ -28,30 +28,23 @@ import fundamental
 import institutional
 import news
 import portfolio
+import tracker
+from scoring import STRATEGIES, weighted_score
 from watchlist import WATCHLIST
 
 TOKEN = FINMIND_TOKEN or None
 
-# ===== 頁面設定 =====
-st.set_page_config(
-    page_title="臺股雷達",
-    page_icon="📊",
-    layout="wide",
-)
+st.set_page_config(page_title="臺股雷達", page_icon="📊", layout="wide")
 
-SIGNAL_COLORS = {
-    "green": "#22c55e",
-    "yellow": "#eab308",
-    "red": "#ef4444",
-}
 SIGNAL_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
-SIGNAL_TEXT = {"green": "綠燈", "yellow": "黃燈", "red": "紅燈"}
 
 
-def signal_badge(signal, score):
-    color = SIGNAL_COLORS[signal]
-    label = SIGNAL_TEXT[signal]
-    return f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-weight:bold">{label} {score}/10</span>'
+def overall_signal(score):
+    if score >= 7:
+        return "green"
+    elif score >= 4:
+        return "yellow"
+    return "red"
 
 
 # ===== 側欄 =====
@@ -62,7 +55,17 @@ page = st.sidebar.radio("功能", [
     "⚔ 股票 PK",
     "🔥 題材趨勢",
     "📈 歷史回測",
+    "📋 訊號追蹤",
 ])
+
+st.sidebar.markdown("---")
+
+# 全域策略選擇
+strategy_key = st.sidebar.selectbox(
+    "投資策略",
+    list(STRATEGIES.keys()),
+    format_func=lambda k: f"{STRATEGIES[k]['label']} — {STRATEGIES[k]['description']}",
+)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("⚠ 僅供參考，不構成投資建議")
@@ -81,7 +84,7 @@ if page == "🔍 個股分析":
     if st.button("開始分析", type="primary", use_container_width=True):
         with st.spinner("抓取資料中..."):
             name = fetch_stock_name(stock_id, TOKEN)
-            industry = fetch_stock_industry(stock_id, TOKEN)
+            ind = fetch_stock_industry(stock_id, TOKEN)
             price_df = fetch_stock_price(stock_id, token=TOKEN)
             inst_df = fetch_institutional(stock_id, token=TOKEN)
             per_df = fetch_per_pbr(stock_id, token=TOKEN)
@@ -90,53 +93,49 @@ if page == "🔍 個股分析":
 
         with st.spinner("分析中..."):
             tech = technical.analyze(price_df)
-            fund = fundamental.analyze(per_df, rev_df, industry)
+            fund = fundamental.analyze(per_df, rev_df, ind)
             inst = institutional.analyze(inst_df)
 
-        # 綜合評分
-        scores = [tech["score"], fund["score"], inst["score"], news_result["score"]]
-        avg = round(sum(scores) / len(scores), 1)
-        if avg >= 7:
-            overall = "green"
-        elif avg >= 4:
-            overall = "yellow"
-        else:
-            overall = "red"
+        avg, strategy_info = weighted_score(
+            tech["score"], fund["score"], inst["score"], news_result["score"], strategy_key
+        )
+        signal = overall_signal(avg)
 
-        # 標題
         st.markdown(f"## {stock_id} {name}")
-        if industry:
-            st.caption(f"產業：{industry}")
+        if ind:
+            st.caption(f"產業：{ind} ｜ 策略：{strategy_info['label']}")
 
-        # 綜合評分大字
-        col_score, col_advice = st.columns([1, 2])
-        with col_score:
-            st.metric("綜合評分", f"{avg} / 10")
-            st.markdown(signal_badge(overall, avg), unsafe_allow_html=True)
-        with col_advice:
+        # 評分區
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.metric("綜合評分（加權）", f"{avg} / 10")
+            st.markdown(f"### {SIGNAL_EMOJI[signal]} {avg}/10")
+        with c2:
             if avg >= 7:
                 st.success("各面向條件良好，可以考慮佈局。")
             elif avg >= 5.5:
-                st.warning("條件尚可，建議分批進場，不要一次重壓。")
+                st.warning("條件尚可，建議分批進場。")
             elif avg >= 4:
-                st.warning("條件普通，建議觀望或僅小量試水。")
+                st.warning("條件普通，建議觀望。")
             else:
-                st.error("多項指標偏空，目前不建議進場。")
+                st.error("偏空，不建議進場。")
 
-            if "current_price" in tech and "ma20" in tech:
-                st.caption(f"📍 停損參考：20日均線 {tech['ma20']:.0f} 元")
+            w = strategy_info["weights"]
+            st.caption(
+                f"權重：技術{w['tech']:.0%} 基本{w['fund']:.0%} "
+                f"籌碼{w['inst']:.0%} 消息{w['news']:.0%}"
+            )
 
-        # K線圖
+        # K 線圖
         if not price_df.empty:
             chart_df = price_df.sort_values("date").tail(60).copy()
             chart_df["date"] = pd.to_datetime(chart_df["date"])
             chart_df["close"] = chart_df["close"].astype(float)
             chart_df = chart_df.set_index("date")
-
             st.markdown("### 近 60 日走勢")
             st.line_chart(chart_df["close"])
 
-        # 四面向詳細
+        # 四面向
         st.markdown("### 四面向分析")
         sections = [
             ("技術面", tech),
@@ -144,7 +143,6 @@ if page == "🔍 個股分析":
             ("籌碼面", inst),
             ("消息面", news_result),
         ]
-
         cols = st.columns(4)
         for i, (label, data) in enumerate(sections):
             with cols[i]:
@@ -188,7 +186,6 @@ elif page == "📡 觀察清單掃描":
 
         names = fetch_stock_names(all_stocks, TOKEN)
         total = len(all_stocks)
-
         progress = st.progress(0, text="載入中...")
         results = []
 
@@ -201,14 +198,16 @@ elif page == "📡 觀察清單掃描":
                 per_df = fetch_per_pbr(stock_id, token=TOKEN)
                 inst_df = fetch_institutional(stock_id, token=TOKEN)
                 rev_df = fetch_monthly_revenue(stock_id, token=TOKEN)
-                industry = fetch_stock_industry(stock_id, TOKEN)
+                ind = fetch_stock_industry(stock_id, TOKEN)
 
                 tech = technical.analyze(price_df)
-                fund = fundamental.analyze(per_df, rev_df, industry)
-                inst = institutional.analyze(inst_df)
+                fund = fundamental.analyze(per_df, rev_df, ind)
+                inst_result = institutional.analyze(inst_df)
 
-                avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
-                overall = "green" if avg >= 7 else ("yellow" if avg >= 4 else "red")
+                avg, _ = weighted_score(
+                    tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key
+                )
+                signal = overall_signal(avg)
 
                 results.append({
                     "代號": stock_id,
@@ -216,9 +215,9 @@ elif page == "📡 觀察清單掃描":
                     "板塊": stock_sectors[stock_id],
                     "技術": tech["score"],
                     "基本": fund["score"],
-                    "籌碼": inst["score"],
+                    "籌碼": inst_result["score"],
                     "綜合": avg,
-                    "訊號": SIGNAL_EMOJI[overall],
+                    "訊號": SIGNAL_EMOJI[signal],
                 })
             except Exception:
                 pass
@@ -229,7 +228,6 @@ elif page == "📡 觀察清單掃描":
         if results:
             df = pd.DataFrame(results).sort_values("綜合", ascending=False)
 
-            # 綠燈 / 值得關注 / 紅燈
             greens = df[df["綜合"] >= 7]
             watch = df[(df["綜合"] >= 6) & (df["綜合"] < 7)]
             reds = df[df["綜合"] < 4]
@@ -237,23 +235,32 @@ elif page == "📡 觀察清單掃描":
             if not greens.empty:
                 st.success(f"🟢 綠燈候選（{len(greens)} 檔）")
                 st.dataframe(greens, use_container_width=True, hide_index=True)
-
             if not watch.empty:
                 st.warning(f"🟡 值得關注（{len(watch)} 檔）")
                 st.dataframe(watch, use_container_width=True, hide_index=True)
-
             if not reds.empty:
                 st.error(f"🔴 偏空警示（{len(reds)} 檔）")
                 st.dataframe(reds, use_container_width=True, hide_index=True)
 
-            # 完整排名
             st.markdown("### 完整排名")
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-            # 板塊分析
             st.markdown("### 板塊強弱")
             sector_df = df.groupby("板塊")["綜合"].mean().round(1).sort_values(ascending=False)
             st.bar_chart(sector_df)
+
+            # 儲存訊號
+            try:
+                scan_results = [
+                    {"stock_id": r["代號"], "name": r["名稱"], "sector": r["板塊"],
+                     "tech": r["技術"], "fund": r["基本"], "inst": r["籌碼"],
+                     "avg": r["綜合"], "overall": overall_signal(r["綜合"])}
+                    for r in results
+                ]
+                filepath = tracker.save_scan(scan_results)
+                st.caption(f"📝 訊號已記錄：{filepath}")
+            except Exception:
+                pass
 
 
 # ===== 股票 PK =====
@@ -267,45 +274,39 @@ elif page == "⚔ 股票 PK":
         id_b = st.text_input("股票 B", value="2454")
 
     if st.button("開始比較", type="primary", use_container_width=True):
-
         def analyze_one(sid):
-            name = fetch_stock_name(sid, TOKEN)
-            industry = fetch_stock_industry(sid, TOKEN)
+            nm = fetch_stock_name(sid, TOKEN)
+            ind = fetch_stock_industry(sid, TOKEN)
             price_df = fetch_stock_price(sid, token=TOKEN)
             per_df = fetch_per_pbr(sid, token=TOKEN)
             inst_df = fetch_institutional(sid, token=TOKEN)
             rev_df = fetch_monthly_revenue(sid, token=TOKEN)
-            tech = technical.analyze(price_df)
-            fund = fundamental.analyze(per_df, rev_df, industry)
-            inst = institutional.analyze(inst_df)
-            avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
-            return name, tech, fund, inst, avg
+            t = technical.analyze(price_df)
+            f = fundamental.analyze(per_df, rev_df, ind)
+            ins = institutional.analyze(inst_df)
+            avg, _ = weighted_score(t["score"], f["score"], ins["score"], 5.0, strategy_key)
+            return nm, t["score"], f["score"], ins["score"], avg
 
         with st.spinner("分析中..."):
-            name_a, tech_a, fund_a, inst_a, avg_a = analyze_one(id_a)
-            name_b, tech_b, fund_b, inst_b, avg_b = analyze_one(id_b)
+            na, ta, fa, ia, avg_a = analyze_one(id_a)
+            nb, tb, fb, ib, avg_b = analyze_one(id_b)
 
-        # 對比表
-        compare_data = {
-            "面向": ["技術面", "基本面", "籌碼面", "綜合"],
-            f"{id_a} {name_a}": [tech_a["score"], fund_a["score"], inst_a["score"], avg_a],
-            f"{id_b} {name_b}": [tech_b["score"], fund_b["score"], inst_b["score"], avg_b],
-        }
-        compare_df = pd.DataFrame(compare_data)
+        compare_df = pd.DataFrame({
+            "面向": ["技術面", "基本面", "籌碼面", "綜合（加權）"],
+            f"{id_a} {na}": [ta, fa, ia, avg_a],
+            f"{id_b} {nb}": [tb, fb, ib, avg_b],
+        })
         st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
-        # 視覺化比較
         chart_data = pd.DataFrame({
-            name_a: [tech_a["score"], fund_a["score"], inst_a["score"]],
-            name_b: [tech_b["score"], fund_b["score"], inst_b["score"]],
+            na: [ta, fa, ia], nb: [tb, fb, ib],
         }, index=["技術面", "基本面", "籌碼面"])
         st.bar_chart(chart_data)
 
-        # 結論
         if avg_a > avg_b + 1:
-            st.success(f"📊 {id_a} {name_a} 目前各面向條件明顯較優（{avg_a} vs {avg_b}）")
+            st.success(f"📊 {na} 條件明顯較優（{avg_a} vs {avg_b}）")
         elif avg_b > avg_a + 1:
-            st.success(f"📊 {id_b} {name_b} 目前各面向條件明顯較優（{avg_b} vs {avg_a}）")
+            st.success(f"📊 {nb} 條件明顯較優（{avg_b} vs {avg_a}）")
         else:
             st.info(f"📊 兩檔條件相近（{avg_a} vs {avg_b}）")
 
@@ -319,19 +320,18 @@ elif page == "🔥 題材趨勢":
     if st.button("開始掃描題材", type="primary", use_container_width=True):
         progress = st.progress(0, text="掃描中...")
         theme_results = []
-
         theme_list = list(THEMES.items())
+
         for i, (name, config) in enumerate(theme_list):
             progress.progress((i + 1) / len(theme_list), text=f"掃描「{name}」...")
             total_heat = 0
             for kw in config["keywords"]:
                 total_heat += news.count_news_heat(kw)
                 time.sleep(0.3)
-            theme_results.append({"題材": name, "熱度（新聞數）": total_heat})
+            theme_results.append({"題材": name, "熱度": total_heat})
 
         progress.empty()
-
-        df = pd.DataFrame(theme_results).sort_values("熱度（新聞數）", ascending=False)
+        df = pd.DataFrame(theme_results).sort_values("熱度", ascending=False)
         st.bar_chart(df.set_index("題材"))
         st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -350,7 +350,7 @@ elif page == "📈 歷史回測":
         from backtest import generate_signals, calculate_trades
 
         with st.spinner("抓取歷史資料..."):
-            name = fetch_stock_name(bt_stock, TOKEN)
+            nm = fetch_stock_name(bt_stock, TOKEN)
             price_df = fetch_stock_price(bt_stock, days=bt_days, token=TOKEN)
 
         if price_df.empty or len(price_df) < 60:
@@ -360,10 +360,9 @@ elif page == "📈 歷史回測":
             signals, still_holding = generate_signals(price_df)
             trades = calculate_trades(signals)
 
-            st.markdown(f"### {bt_stock} {name}")
-            st.caption(f"策略：均線交叉（5日突破20日買，跌破賣） | 資料：{len(price_df)} 日")
+            st.markdown(f"### {bt_stock} {nm}")
+            st.caption(f"策略：均線交叉（5日突破20日買，跌破賣）｜含手續費和證交稅")
 
-            # 走勢圖
             chart_df = price_df.copy()
             chart_df["date"] = pd.to_datetime(chart_df["date"])
             chart_df["close"] = chart_df["close"].astype(float)
@@ -371,24 +370,18 @@ elif page == "📈 歷史回測":
             st.line_chart(chart_df["close"])
 
             if trades:
-                # 交易紀錄
-                trade_data = []
-                for i, t in enumerate(trades, 1):
-                    trade_data.append({
-                        "#": i,
-                        "買入日期": t["buy_date"],
-                        "買入價": t["buy_price"],
-                        "賣出日期": t["sell_date"],
-                        "賣出價": t["sell_price"],
-                        "報酬": f"{t['return_pct']:+.1f}%",
-                    })
+                trade_data = [{
+                    "#": i + 1,
+                    "買入日": t["buy_date"],
+                    "買入價": t["buy_price"],
+                    "賣出日": t["sell_date"],
+                    "賣出價": t["sell_price"],
+                    "報酬": f"{t['return_pct']:+.1f}%",
+                } for i, t in enumerate(trades)]
                 st.dataframe(pd.DataFrame(trade_data), use_container_width=True, hide_index=True)
 
-                # 統計
                 returns = [t["return_pct"] for t in trades]
                 wins = [r for r in returns if r > 0]
-                losses = [r for r in returns if r <= 0]
-
                 total_return = 1
                 for r in returns:
                     total_return *= (1 + r / 100)
@@ -408,3 +401,64 @@ elif page == "📈 歷史回測":
                     st.metric("買進持有", f"{buy_hold:+.1f}%")
             else:
                 st.info("此期間沒有產生交易訊號。")
+
+
+# ===== 訊號追蹤 =====
+elif page == "📋 訊號追蹤":
+    st.title("📋 訊號追蹤")
+    st.caption("每次掃描的結果都會自動記錄，你可以回頭看系統到底準不準。")
+
+    records = tracker.list_records()
+
+    if not records:
+        st.info("還沒有任何掃描記錄。先到「觀察清單掃描」跑一次，或等每日自動排程。")
+    else:
+        selected_date = st.selectbox("選擇日期", records)
+        record = tracker.load_record(selected_date)
+
+        if record:
+            st.markdown(f"### {record['date']} 掃描結果（{record['count']} 檔）")
+
+            df = pd.DataFrame(record["results"])
+            df = df.sort_values("avg", ascending=False)
+            df["訊號"] = df["overall"].map(SIGNAL_EMOJI)
+
+            display_df = df.rename(columns={
+                "stock_id": "代號", "name": "名稱", "sector": "板塊",
+                "tech": "技術", "fund": "基本", "inst": "籌碼", "avg": "綜合",
+            })
+            st.dataframe(
+                display_df[["代號", "名稱", "板塊", "技術", "基本", "籌碼", "綜合", "訊號"]],
+                use_container_width=True, hide_index=True,
+            )
+
+            # 準確度回顧
+            st.markdown("### 📊 準確度回顧")
+            days_after = st.slider("對比幾天後的表現？", 5, 30, 10)
+
+            if st.button("分析準確度"):
+                with st.spinner("比對實際價格中..."):
+                    review = tracker.review_accuracy(
+                        selected_date, fetch_stock_price, days_after
+                    )
+
+                if review:
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.metric("準確率", f"{review['accuracy']}%")
+                    with c2:
+                        st.metric("判斷正確", f"{review['correct']}/{review['total']}")
+                    with c3:
+                        st.metric("回顧天數", f"{review['days_after']} 天")
+
+                    review_df = pd.DataFrame(review["results"])
+                    review_df["結果"] = review_df["correct"].map({True: "✓", False: "✗"})
+                    review_df["實際漲跌"] = review_df["actual_return"].apply(lambda x: f"{x:+.1f}%")
+                    st.dataframe(
+                        review_df[["stock_id", "name", "score", "system_said", "實際漲跌", "結果"]].rename(columns={
+                            "stock_id": "代號", "name": "名稱", "score": "當時評分", "system_said": "系統建議",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+                else:
+                    st.warning("資料不足，無法回顧（可能日期太近或資料抓取失敗）")
