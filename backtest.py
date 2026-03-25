@@ -11,8 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pandas as pd
 import numpy as np
-from config import FINMIND_TOKEN
-from data_fetcher import fetch_stock_name, fetch_stock_price
+import market
 
 
 def generate_signals(df):
@@ -185,15 +184,14 @@ def main():
 
     stock_id = sys.argv[1]
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 500
-    token = FINMIND_TOKEN or None
 
     print(f"\n⏳ 回測 {stock_id}（{days} 天）...\n")
 
-    name = fetch_stock_name(stock_id, token)
+    name = market.fetch_stock_name(stock_id)
     print(f"  股票：{stock_id} {name}")
 
     print(f"  抓取歷史資料...")
-    price_df = fetch_stock_price(stock_id, days=days, token=token)
+    price_df = market.fetch_stock_price(stock_id, days=days)
 
     if price_df.empty or len(price_df) < 60:
         print("  ⚠ 資料不足，至少需要 60 天以上的資料")

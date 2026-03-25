@@ -11,13 +11,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import FINMIND_TOKEN
-from data_fetcher import fetch_stock_names
 from news import count_news_heat, fetch_news
+import market
 import technical
 import fundamental
 import institutional
-from data_fetcher import fetch_stock_price, fetch_per_pbr, fetch_institutional, fetch_monthly_revenue
 
 SIGNAL_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
@@ -71,13 +69,14 @@ def scan_theme(name, config):
 def quick_score(stock_id, token=None):
     """快速取得單一股票綜合分數"""
     try:
-        price_df = fetch_stock_price(stock_id, token=token)
-        per_df = fetch_per_pbr(stock_id, token=token)
-        inst_df = fetch_institutional(stock_id, token=token)
-        rev_df = fetch_monthly_revenue(stock_id, token=token)
+        price_df = market.fetch_stock_price(stock_id)
+        per_df = market.fetch_per_pbr(stock_id)
+        inst_df = market.fetch_institutional(stock_id)
+        rev_df = market.fetch_monthly_revenue(stock_id)
+        ind = market.fetch_stock_industry(stock_id)
 
         tech = technical.analyze(price_df)
-        fund = fundamental.analyze(per_df, rev_df)
+        fund = fundamental.analyze(per_df, rev_df, ind)
         inst = institutional.analyze(inst_df)
 
         avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)

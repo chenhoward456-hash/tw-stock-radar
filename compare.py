@@ -23,9 +23,10 @@ def analyze_stock(stock_id):
     per_df = market.fetch_per_pbr(stock_id)
     inst_df = market.fetch_institutional(stock_id)
     rev_df = market.fetch_monthly_revenue(stock_id)
+    ind = market.fetch_stock_industry(stock_id)
 
     tech = technical.analyze(price_df)
-    fund = fundamental.analyze(per_df, rev_df)
+    fund = fundamental.analyze(per_df, rev_df, ind)
     inst = institutional.analyze(inst_df)
 
     avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
