@@ -9,15 +9,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import FINMIND_TOKEN, TOTAL_BUDGET
-from data_fetcher import (
-    fetch_stock_name,
-    fetch_stock_industry,
-    fetch_stock_price,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+from config import TOTAL_BUDGET
+import market
 import technical
 import fundamental
 import institutional
@@ -29,33 +22,32 @@ import report
 def check(stock_id, budget=0):
     """對指定股票進行多維度檢查"""
     stock_id = str(stock_id).strip()
-    token = FINMIND_TOKEN or None
 
     print(f"\n🔍 正在分析 {stock_id}，請稍候...\n")
 
     # 抓取資料
     print("[1/7] 查詢股票名稱...")
-    name = fetch_stock_name(stock_id, token)
+    name = market.fetch_stock_name(stock_id)
     print(f"  → {name}")
 
     print("[2/7] 查詢產業類別...")
-    industry = fetch_stock_industry(stock_id, token)
+    industry = market.fetch_stock_industry(stock_id)
     print(f"  → {industry or '未知'}")
 
     print("[3/7] 抓取股價資料...")
-    price_df = fetch_stock_price(stock_id, token=token)
+    price_df = market.fetch_stock_price(stock_id)
     print(f"  → {len(price_df)} 筆日K資料")
 
     print("[4/7] 抓取法人買賣超...")
-    inst_df = fetch_institutional(stock_id, token=token)
+    inst_df = market.fetch_institutional(stock_id)
     print(f"  → {len(inst_df)} 筆法人資料")
 
     print("[5/7] 抓取本益比...")
-    per_df = fetch_per_pbr(stock_id, token=token)
+    per_df = market.fetch_per_pbr(stock_id)
     print(f"  → {len(per_df)} 筆估值資料")
 
     print("[6/7] 抓取月營收...")
-    rev_df = fetch_monthly_revenue(stock_id, token=token)
+    rev_df = market.fetch_monthly_revenue(stock_id)
     print(f"  → {len(rev_df)} 筆營收資料")
 
     print("[7/7] 掃描近期新聞...")

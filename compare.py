@@ -8,14 +8,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import FINMIND_TOKEN
-from data_fetcher import (
-    fetch_stock_name,
-    fetch_stock_price,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+import market
 import technical
 import fundamental
 import institutional
@@ -24,12 +17,12 @@ import institutional
 SIGNAL_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
 
-def analyze_stock(stock_id, token=None):
+def analyze_stock(stock_id):
     """完整分析一檔股票"""
-    price_df = fetch_stock_price(stock_id, token=token)
-    per_df = fetch_per_pbr(stock_id, token=token)
-    inst_df = fetch_institutional(stock_id, token=token)
-    rev_df = fetch_monthly_revenue(stock_id, token=token)
+    price_df = market.fetch_stock_price(stock_id)
+    per_df = market.fetch_per_pbr(stock_id)
+    inst_df = market.fetch_institutional(stock_id)
+    rev_df = market.fetch_monthly_revenue(stock_id)
 
     tech = technical.analyze(price_df)
     fund = fundamental.analyze(per_df, rev_df)
@@ -54,17 +47,16 @@ def main():
         sys.exit(1)
 
     id_a, id_b = sys.argv[1], sys.argv[2]
-    token = FINMIND_TOKEN or None
 
     print(f"\n⚔ 股票 PK：{id_a} vs {id_b}\n")
 
     print(f"分析 {id_a}...")
-    name_a = fetch_stock_name(id_a, token)
-    data_a = analyze_stock(id_a, token)
+    name_a = market.fetch_stock_name(id_a)
+    data_a = analyze_stock(id_a)
 
     print(f"分析 {id_b}...")
-    name_b = fetch_stock_name(id_b, token)
-    data_b = analyze_stock(id_b, token)
+    name_b = market.fetch_stock_name(id_b)
+    data_b = analyze_stock(id_b)
 
     # 表頭
     label_a = f"{id_a} {name_a}"

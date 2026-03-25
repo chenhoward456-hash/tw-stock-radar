@@ -4,7 +4,7 @@
 """
 import pandas as pd
 import numpy as np
-from data_fetcher import fetch_stock_price, fetch_stock_name
+import market
 
 
 def get_returns(stock_ids, days=60, token=None):
@@ -13,7 +13,7 @@ def get_returns(stock_ids, days=60, token=None):
 
     for sid in stock_ids:
         try:
-            df = fetch_stock_price(sid, days=days + 30, token=token)
+            df = market.fetch_stock_price(sid, days=days + 30)
             if df.empty:
                 continue
             df = df.sort_values("date").reset_index(drop=True)
@@ -61,7 +61,7 @@ def check_diversification(stock_ids, token=None):
 
     names = {}
     for sid in stock_ids:
-        names[sid] = fetch_stock_name(sid, token)
+        names[sid] = market.fetch_stock_name(sid)
 
     # 找高相關性的配對
     high_pairs = []

@@ -14,8 +14,6 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import requests
-from config import FINMIND_TOKEN
-
 # 讀取通知設定
 try:
     from config import LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID
@@ -30,14 +28,7 @@ except ImportError:
     TELEGRAM_CHAT_ID = ""
 
 from watchlist import WATCHLIST
-from data_fetcher import (
-    fetch_stock_names,
-    fetch_stock_price,
-    fetch_stock_industry,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+import market
 import technical
 import fundamental
 import institutional
@@ -83,7 +74,7 @@ def send_telegram(message):
         return False
 
 
-def run_scan(token=None):
+def run_scan():
     """執行掃描，回傳結果列表"""
     all_stocks = []
     stock_sectors = {}
@@ -92,7 +83,7 @@ def run_scan(token=None):
             all_stocks.append(code)
             stock_sectors[code] = sector
 
-    names = fetch_stock_names(all_stocks, token)
+    names = market.fetch_stock_names(all_stocks)
     total = len(all_stocks)
 
     results = []
@@ -101,11 +92,11 @@ def run_scan(token=None):
         print(f"  [{i+1}/{total}] {stock_id} {name}...", end="", flush=True)
 
         try:
-            price_df = fetch_stock_price(stock_id, token=token)
-            per_df = fetch_per_pbr(stock_id, token=token)
-            inst_df = fetch_institutional(stock_id, token=token)
-            rev_df = fetch_monthly_revenue(stock_id, token=token)
-            industry = fetch_stock_industry(stock_id, token)
+            price_df = market.fetch_stock_price(stock_id)
+            per_df = market.fetch_per_pbr(stock_id)
+            inst_df = market.fetch_institutional(stock_id)
+            rev_df = market.fetch_monthly_revenue(stock_id)
+            industry = market.fetch_stock_industry(stock_id)
 
             tech = technical.analyze(price_df)
             fund = fundamental.analyze(per_df, rev_df, industry)
@@ -204,8 +195,6 @@ def main():
         print()
         sys.exit(1)
 
-    token = FINMIND_TOKEN or None
-
     print()
     print("=" * 50)
 
@@ -220,7 +209,7 @@ def main():
     print()
     print("開始掃描...\n")
 
-    results = run_scan(token)
+    results = run_scan()
 
     if not results:
         print("\n⚠ 沒有取得任何結果")

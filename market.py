@@ -20,6 +20,20 @@ def fetch_stock_name(symbol):
     return tw.fetch_stock_name(symbol, TOKEN)
 
 
+def fetch_stock_names(symbols):
+    """批次查名稱，混合臺股美股都行"""
+    result = {}
+    tw_ids = [s for s in symbols if not is_us(s)]
+    us_ids = [s for s in symbols if is_us(s)]
+
+    if tw_ids:
+        result.update(tw.fetch_stock_names(tw_ids, TOKEN))
+    for s in us_ids:
+        result[s] = us.fetch_stock_name(s)
+
+    return result
+
+
 def fetch_stock_industry(symbol):
     if is_us(symbol):
         return us.fetch_stock_industry(symbol)

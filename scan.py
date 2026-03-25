@@ -9,16 +9,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import FINMIND_TOKEN
 from watchlist import WATCHLIST
-from data_fetcher import (
-    fetch_stock_names,
-    fetch_stock_price,
-    fetch_stock_industry,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+import market
 import technical
 import fundamental
 import institutional
@@ -27,14 +19,14 @@ import institutional
 SIGNAL_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
 
-def scan_one(stock_id, token=None):
+def scan_one(stock_id):
     """掃描單一股票，回傳各面向分數"""
     try:
-        price_df = fetch_stock_price(stock_id, token=token)
-        per_df = fetch_per_pbr(stock_id, token=token)
-        inst_df = fetch_institutional(stock_id, token=token)
-        rev_df = fetch_monthly_revenue(stock_id, token=token)
-        industry = fetch_stock_industry(stock_id, token)
+        price_df = market.fetch_stock_price(stock_id)
+        per_df = market.fetch_per_pbr(stock_id)
+        inst_df = market.fetch_institutional(stock_id)
+        rev_df = market.fetch_monthly_revenue(stock_id)
+        industry = market.fetch_stock_industry(stock_id)
 
         tech = technical.analyze(price_df)
         fund = fundamental.analyze(per_df, rev_df, industry)
@@ -149,8 +141,6 @@ def print_green_picks(results):
 
 
 def main():
-    token = FINMIND_TOKEN or None
-
     # 收集所有股票代號
     all_stocks = []
     stock_sectors = {}
@@ -168,7 +158,7 @@ def main():
 
     # 一次查詢所有名稱（只呼叫一次 API）
     print(" 載入股票資訊...")
-    names = fetch_stock_names(all_stocks, token)
+    names = market.fetch_stock_names(all_stocks)
     print(f" → 完成\n")
 
     # 逐一掃描
@@ -177,7 +167,7 @@ def main():
         name = names.get(stock_id, stock_id)
         print(f" [{i+1:>2}/{total}] {stock_id} {name}...", end="", flush=True)
 
-        data = scan_one(stock_id, token)
+        data = scan_one(stock_id)
 
         if data:
             data["stock_id"] = stock_id

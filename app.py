@@ -13,16 +13,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from config import FINMIND_TOKEN, TOTAL_BUDGET
-from data_fetcher import (
-    fetch_stock_name,
-    fetch_stock_industry,
-    fetch_stock_names,
-    fetch_stock_price,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+from config import TOTAL_BUDGET
+import market
 import technical
 import fundamental
 import institutional
@@ -31,8 +23,6 @@ import portfolio
 import tracker
 from scoring import STRATEGIES, weighted_score
 from watchlist import WATCHLIST
-
-TOKEN = FINMIND_TOKEN or None
 
 st.set_page_config(page_title="臺股雷達", page_icon="📊", layout="wide")
 
@@ -83,7 +73,6 @@ if page == "🔍 個股分析":
         budget = st.number_input("投資預算（選填）", value=TOTAL_BUDGET, step=100000, format="%d")
 
     if st.button("開始分析", type="primary", use_container_width=True):
-        import market
         stock_id = stock_id.strip().upper()
         is_us = market.is_us(stock_id)
 
@@ -189,7 +178,7 @@ elif page == "📡 觀察清單掃描":
                 all_stocks.append(code)
                 stock_sectors[code] = sector
 
-        names = fetch_stock_names(all_stocks, TOKEN)
+        names = market.fetch_stock_names(all_stocks)
         total = len(all_stocks)
         progress = st.progress(0, text="載入中...")
         results = []
@@ -199,11 +188,11 @@ elif page == "📡 觀察清單掃描":
             progress.progress((i + 1) / total, text=f"掃描 {stock_id} {sname}...")
 
             try:
-                price_df = fetch_stock_price(stock_id, token=TOKEN)
-                per_df = fetch_per_pbr(stock_id, token=TOKEN)
-                inst_df = fetch_institutional(stock_id, token=TOKEN)
-                rev_df = fetch_monthly_revenue(stock_id, token=TOKEN)
-                ind = fetch_stock_industry(stock_id, TOKEN)
+                price_df = market.fetch_stock_price(stock_id)
+                per_df = market.fetch_per_pbr(stock_id)
+                inst_df = market.fetch_institutional(stock_id)
+                rev_df = market.fetch_monthly_revenue(stock_id)
+                ind = market.fetch_stock_industry(stock_id)
 
                 tech = technical.analyze(price_df)
                 fund = fundamental.analyze(per_df, rev_df, ind)
@@ -280,12 +269,12 @@ elif page == "⚔ 股票 PK":
 
     if st.button("開始比較", type="primary", use_container_width=True):
         def analyze_one(sid):
-            nm = fetch_stock_name(sid, TOKEN)
-            ind = fetch_stock_industry(sid, TOKEN)
-            price_df = fetch_stock_price(sid, token=TOKEN)
-            per_df = fetch_per_pbr(sid, token=TOKEN)
-            inst_df = fetch_institutional(sid, token=TOKEN)
-            rev_df = fetch_monthly_revenue(sid, token=TOKEN)
+            nm = market.fetch_stock_name(sid)
+            ind = market.fetch_stock_industry(sid)
+            price_df = market.fetch_stock_price(sid)
+            per_df = market.fetch_per_pbr(sid)
+            inst_df = market.fetch_institutional(sid)
+            rev_df = market.fetch_monthly_revenue(sid)
             t = technical.analyze(price_df)
             f = fundamental.analyze(per_df, rev_df, ind)
             ins = institutional.analyze(inst_df)
@@ -479,7 +468,7 @@ elif page == "💼 持倉監控":
                     stock_ids = [r["stock_id"] for r in results]
 
                     with st.spinner("計算關聯性..."):
-                        div = correlation.check_diversification(stock_ids, TOKEN)
+                        div = correlation.check_diversification(stock_ids)
 
                     for d in div["details"]:
                         if d.strip():
@@ -529,8 +518,8 @@ elif page == "📈 歷史回測":
         from backtest import generate_signals, calculate_trades
 
         with st.spinner("抓取歷史資料..."):
-            nm = fetch_stock_name(bt_stock, TOKEN)
-            price_df = fetch_stock_price(bt_stock, days=bt_days, token=TOKEN)
+            nm = market.fetch_stock_name(bt_stock)
+            price_df = market.fetch_stock_price(bt_stock, days=bt_days)
 
         if price_df.empty or len(price_df) < 60:
             st.error("資料不足，至少需要 60 天")
@@ -618,7 +607,7 @@ elif page == "📋 訊號追蹤":
             if st.button("分析準確度"):
                 with st.spinner("比對實際價格中..."):
                     review = tracker.review_accuracy(
-                        selected_date, fetch_stock_price, days_after
+                        selected_date, market.fetch_stock_price, days_after
                     )
 
                 if review:

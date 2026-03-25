@@ -10,22 +10,12 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import FINMIND_TOKEN
 from holdings import HOLDINGS
-from data_fetcher import (
-    fetch_stock_name,
-    fetch_stock_industry,
-    fetch_stock_price,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+import market
 import technical
 import fundamental
 import institutional
 from notify import send_line
-
-TOKEN = FINMIND_TOKEN or None
 
 
 def check_holding(h):
@@ -34,12 +24,12 @@ def check_holding(h):
     buy_price = h["buy_price"]
     shares = h["shares"]
 
-    name = fetch_stock_name(sid, TOKEN)
-    industry = fetch_stock_industry(sid, TOKEN)
-    price_df = fetch_stock_price(sid, token=TOKEN)
-    per_df = fetch_per_pbr(sid, token=TOKEN)
-    inst_df = fetch_institutional(sid, token=TOKEN)
-    rev_df = fetch_monthly_revenue(sid, token=TOKEN)
+    name = market.fetch_stock_name(sid)
+    industry = market.fetch_stock_industry(sid)
+    price_df = market.fetch_stock_price(sid)
+    per_df = market.fetch_per_pbr(sid)
+    inst_df = market.fetch_institutional(sid)
+    rev_df = market.fetch_monthly_revenue(sid)
 
     tech = technical.analyze(price_df)
     fund = fundamental.analyze(per_df, rev_df, industry)

@@ -26,21 +26,12 @@ from flask import Flask, request, abort
 import requests
 
 from config import (
-    FINMIND_TOKEN,
     LINE_CHANNEL_ACCESS_TOKEN,
     LINE_CHANNEL_SECRET,
     LINE_USER_ID,
     TOTAL_BUDGET,
 )
-from data_fetcher import (
-    fetch_stock_name,
-    fetch_stock_industry,
-    fetch_stock_names,
-    fetch_stock_price,
-    fetch_institutional,
-    fetch_per_pbr,
-    fetch_monthly_revenue,
-)
+import market
 import technical
 import fundamental
 import institutional
@@ -48,8 +39,6 @@ import news
 import portfolio
 
 app = Flask(__name__)
-
-TOKEN = FINMIND_TOKEN or None
 
 # 你原本的 webhook，不認識的訊息會轉發過去
 ORIGINAL_WEBHOOK = "https://howard456.vercel.app/api/line/webhook"
@@ -102,12 +91,12 @@ def push_line(user_id, text):
 
 def do_check(stock_id):
     """執行個股分析，回傳文字報告"""
-    name = fetch_stock_name(stock_id, TOKEN)
-    industry = fetch_stock_industry(stock_id, TOKEN)
-    price_df = fetch_stock_price(stock_id, token=TOKEN)
-    inst_df = fetch_institutional(stock_id, token=TOKEN)
-    per_df = fetch_per_pbr(stock_id, token=TOKEN)
-    rev_df = fetch_monthly_revenue(stock_id, token=TOKEN)
+    name = market.fetch_stock_name(stock_id)
+    industry = market.fetch_stock_industry(stock_id)
+    price_df = market.fetch_stock_price(stock_id)
+    inst_df = market.fetch_institutional(stock_id)
+    per_df = market.fetch_per_pbr(stock_id)
+    rev_df = market.fetch_monthly_revenue(stock_id)
     news_result = news.analyze(stock_id, name)
 
     tech = technical.analyze(price_df)
@@ -193,16 +182,16 @@ def do_scan():
             all_stocks.append(code)
             stock_sectors[code] = sector
 
-    names = fetch_stock_names(all_stocks, TOKEN)
+    names = market.fetch_stock_names(all_stocks)
 
     results = []
     for stock_id in all_stocks:
         try:
-            price_df = fetch_stock_price(stock_id, token=TOKEN)
-            per_df = fetch_per_pbr(stock_id, token=TOKEN)
-            inst_df = fetch_institutional(stock_id, token=TOKEN)
-            rev_df = fetch_monthly_revenue(stock_id, token=TOKEN)
-            industry = fetch_stock_industry(stock_id, TOKEN)
+            price_df = market.fetch_stock_price(stock_id)
+            per_df = market.fetch_per_pbr(stock_id)
+            inst_df = market.fetch_institutional(stock_id)
+            rev_df = market.fetch_monthly_revenue(stock_id)
+            industry = market.fetch_stock_industry(stock_id)
 
             tech = technical.analyze(price_df)
             fund = fundamental.analyze(per_df, rev_df, industry)
@@ -260,15 +249,15 @@ def do_scan():
 
 def do_compare(id_a, id_b):
     """比較兩檔股票"""
-    name_a = fetch_stock_name(id_a, TOKEN)
-    name_b = fetch_stock_name(id_b, TOKEN)
+    name_a = market.fetch_stock_name(id_a)
+    name_b = market.fetch_stock_name(id_b)
 
     def score_stock(sid):
-        industry = fetch_stock_industry(sid, TOKEN)
-        price_df = fetch_stock_price(sid, token=TOKEN)
-        per_df = fetch_per_pbr(sid, token=TOKEN)
-        inst_df = fetch_institutional(sid, token=TOKEN)
-        rev_df = fetch_monthly_revenue(sid, token=TOKEN)
+        industry = market.fetch_stock_industry(sid)
+        price_df = market.fetch_stock_price(sid)
+        per_df = market.fetch_per_pbr(sid)
+        inst_df = market.fetch_institutional(sid)
+        rev_df = market.fetch_monthly_revenue(sid)
         tech = technical.analyze(price_df)
         fund = fundamental.analyze(per_df, rev_df, industry)
         inst = institutional.analyze(inst_df)
