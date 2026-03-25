@@ -482,26 +482,106 @@ elif page == "💼 持倉監控":
 # ===== 題材趨勢 =====
 elif page == "🔥 題材趨勢":
     st.title("🔥 題材趨勢雷達")
+    st.caption("掃描熱門題材，告訴你「什麼題材熱 + 裡面哪檔可以關注」")
 
     from trending import THEMES
 
-    if st.button("開始掃描題材", type="primary", use_container_width=True):
-        progress = st.progress(0, text="掃描中...")
+    if st.button("開始掃描", type="primary", use_container_width=True):
+        # Step 1: 掃描各題材熱度
+        progress = st.progress(0, text="掃描題材熱度中...")
         theme_results = []
         theme_list = list(THEMES.items())
 
-        for i, (name, config) in enumerate(theme_list):
-            progress.progress((i + 1) / len(theme_list), text=f"掃描「{name}」...")
+        for i, (tname, config) in enumerate(theme_list):
+            progress.progress((i + 1) / len(theme_list), text=f"掃描「{tname}」...")
             total_heat = 0
             for kw in config["keywords"]:
                 total_heat += news.count_news_heat(kw)
                 time.sleep(0.3)
-            theme_results.append({"題材": name, "熱度": total_heat})
+            theme_results.append({
+                "name": tname,
+                "config": config,
+                "heat": total_heat,
+            })
 
-        progress.empty()
-        df = pd.DataFrame(theme_results).sort_values("熱度", ascending=False)
-        st.bar_chart(df.set_index("題材"))
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        theme_results.sort(key=lambda x: x["heat"], reverse=True)
+
+        # 顯示熱度排名
+        heat_df = pd.DataFrame([{"題材": t["name"], "熱度": t["heat"]} for t in theme_results])
+        st.markdown("### 題材熱度排名")
+        st.bar_chart(heat_df.set_index("題材"))
+
+        # Step 2: 對前 3 名熱門題材掃描個股
+        top_themes = [t for t in theme_results if t["heat"] > 0][:3]
+
+        if not top_themes:
+            st.info("目前沒有偵測到明顯熱門題材。")
+        else:
+            progress.progress(0, text="分析熱門題材個股...")
+            st.markdown("### 🎯 熱門題材推薦個股")
+
+            all_stock_ids = set()
+            for t in top_themes:
+                for sid in t["config"]["stocks"]:
+                    all_stock_ids.add(sid)
+
+            names = market.fetch_stock_names(list(all_stock_ids))
+            total_stocks = sum(len(t["config"]["stocks"]) for t in top_themes)
+            done = 0
+
+            for t in top_themes:
+                st.markdown(f"#### 🔥 {t['name']}（{t['heat']} 則新聞）")
+
+                stock_results = []
+                for sid in t["config"]["stocks"]:
+                    done += 1
+                    progress.progress(done / total_stocks, text=f"分析 {sid}...")
+                    try:
+                        price_df = market.fetch_stock_price(sid)
+                        per_df = market.fetch_per_pbr(sid)
+                        inst_df = market.fetch_institutional(sid)
+                        rev_df = market.fetch_monthly_revenue(sid)
+                        ind = market.fetch_stock_industry(sid)
+
+                        tech = technical.analyze(price_df)
+                        fund = fundamental.analyze(per_df, rev_df, ind)
+                        inst_r = institutional.analyze(inst_df)
+
+                        avg = round((tech["score"] + fund["score"] + inst_r["score"]) / 3, 1)
+                        sig = overall_signal(avg)
+
+                        stock_results.append({
+                            "代號": sid,
+                            "名稱": names.get(sid, sid),
+                            "技術": tech["score"],
+                            "基本": fund["score"],
+                            "籌碼": inst_r["score"],
+                            "綜合": avg,
+                            "訊號": SIGNAL_EMOJI[sig],
+                            "_avg": avg,
+                        })
+                    except Exception:
+                        pass
+                    time.sleep(0.2)
+
+                if stock_results:
+                    stock_results.sort(key=lambda x: x["_avg"], reverse=True)
+
+                    # 推薦
+                    best = stock_results[0]
+                    if best["_avg"] >= 6:
+                        st.success(f"👉 推薦關注：**{best['代號']} {best['名稱']}**（{best['綜合']}/10）— 這個題材裡條件最好的")
+                    elif best["_avg"] >= 4:
+                        st.warning(f"👉 {best['代號']} {best['名稱']}（{best['綜合']}/10）— 題材熱但個股條件普通，建議觀望")
+                    else:
+                        st.error(f"⚠ 這個題材裡的股票目前條件都不好，不建議追")
+
+                    display_df = pd.DataFrame(stock_results).drop(columns=["_avg"])
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("無法取得個股資料")
+
+            progress.empty()
 
 
 # ===== 歷史回測 =====
@@ -574,59 +654,108 @@ elif page == "📈 歷史回測":
 # ===== 訊號追蹤 =====
 elif page == "📋 訊號追蹤":
     st.title("📋 訊號追蹤")
-    st.caption("每次掃描的結果都會自動記錄，你可以回頭看系統到底準不準。")
+    st.caption("系統每次掃描都會自動記錄。這裡讓你驗證：系統上次說的話，到底準不準？")
 
     records = tracker.list_records()
 
     if not records:
-        st.info("還沒有任何掃描記錄。先到「觀察清單掃描」跑一次，或等每日自動排程。")
+        st.info("還沒有任何掃描記錄。先到「觀察清單掃描」跑一次，或等每日自動排程（每天 15:30）。")
     else:
         selected_date = st.selectbox("選擇日期", records)
         record = tracker.load_record(selected_date)
 
         if record:
-            st.markdown(f"### {record['date']} 掃描結果（{record['count']} 檔）")
+            results = record["results"]
+            df = pd.DataFrame(results).sort_values("avg", ascending=False)
 
-            df = pd.DataFrame(record["results"])
-            df = df.sort_values("avg", ascending=False)
+            # 用人話摘要
+            greens = df[df["avg"] >= 7]
+            watch = df[(df["avg"] >= 6) & (df["avg"] < 7)]
+            reds = df[df["avg"] < 4]
+
+            st.markdown(f"### {record['date']} 的掃描記錄")
+
+            summary_parts = []
+            if len(greens) > 0:
+                names_str = "、".join(f"{r['name']}" for _, r in greens.iterrows())
+                summary_parts.append(f"🟢 當時系統說**{names_str}**值得買")
+            if len(watch) > 0:
+                names_str = "、".join(f"{r['name']}" for _, r in watch.iterrows())
+                summary_parts.append(f"🟡 **{names_str}**值得關注")
+            if len(reds) > 0:
+                summary_parts.append(f"🔴 有 **{len(reds)} 檔**被系統標為偏空")
+
+            if summary_parts:
+                for s in summary_parts:
+                    st.markdown(s)
+            else:
+                st.markdown("當時沒有特別突出的訊號。")
+
+            # 簡潔的表格
             df["訊號"] = df["overall"].map(SIGNAL_EMOJI)
-
             display_df = df.rename(columns={
                 "stock_id": "代號", "name": "名稱", "sector": "板塊",
                 "tech": "技術", "fund": "基本", "inst": "籌碼", "avg": "綜合",
             })
-            st.dataframe(
-                display_df[["代號", "名稱", "板塊", "技術", "基本", "籌碼", "綜合", "訊號"]],
-                use_container_width=True, hide_index=True,
-            )
 
-            # 準確度回顧
-            st.markdown("### 📊 準確度回顧")
-            days_after = st.slider("對比幾天後的表現？", 5, 30, 10)
+            with st.expander("查看完整掃描結果", expanded=False):
+                st.dataframe(
+                    display_df[["代號", "名稱", "板塊", "技術", "基本", "籌碼", "綜合", "訊號"]],
+                    use_container_width=True, hide_index=True,
+                )
 
-            if st.button("分析準確度"):
-                with st.spinner("比對實際價格中..."):
+            # 準確度驗證 — 重點功能
+            st.markdown("---")
+            st.markdown("### 🎯 系統說的準不準？")
+            st.caption("選一個天數，看看系統當時給的建議，在那之後股價實際怎麼走。")
+
+            days_after = st.slider("幾天後驗證？", 5, 30, 10)
+
+            if st.button("驗證準確度", type="primary", use_container_width=True):
+                with st.spinner("比對實際股價中（需要一點時間）..."):
                     review = tracker.review_accuracy(
                         selected_date, market.fetch_stock_price, days_after
                     )
 
                 if review:
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.metric("準確率", f"{review['accuracy']}%")
-                    with c2:
-                        st.metric("判斷正確", f"{review['correct']}/{review['total']}")
-                    with c3:
-                        st.metric("回顧天數", f"{review['days_after']} 天")
+                    # 大字標題
+                    acc = review["accuracy"]
+                    if acc >= 70:
+                        st.success(f"### 🎯 準確率 {acc}%（{review['correct']}/{review['total']}）")
+                    elif acc >= 50:
+                        st.warning(f"### 🎯 準確率 {acc}%（{review['correct']}/{review['total']}）")
+                    else:
+                        st.error(f"### 🎯 準確率 {acc}%（{review['correct']}/{review['total']}）")
 
-                    review_df = pd.DataFrame(review["results"])
-                    review_df["結果"] = review_df["correct"].map({True: "✓", False: "✗"})
-                    review_df["實際漲跌"] = review_df["actual_return"].apply(lambda x: f"{x:+.1f}%")
-                    st.dataframe(
-                        review_df[["stock_id", "name", "score", "system_said", "實際漲跌", "結果"]].rename(columns={
-                            "stock_id": "代號", "name": "名稱", "score": "當時評分", "system_said": "系統建議",
-                        }),
-                        use_container_width=True, hide_index=True,
-                    )
+                    st.caption(f"驗證方式：{selected_date} 掃描後 {days_after} 天的實際股價漲跌")
+
+                    # 用人話列出每筆
+                    st.markdown("#### 逐筆驗證")
+                    for r in review["results"]:
+                        said_map = {"buy": "建議買", "hold": "觀望", "avoid": "不建議買"}
+                        said = said_map.get(r["system_said"], r["system_said"])
+                        ret = r["actual_return"]
+                        correct = r["correct"]
+
+                        if correct:
+                            icon = "✅"
+                        else:
+                            icon = "❌"
+
+                        ret_str = f"漲了 {ret:+.1f}%" if ret > 0 else f"跌了 {ret:.1f}%"
+
+                        st.markdown(
+                            f"{icon} **{r['name']}**（當時 {r['score']} 分，系統{said}）"
+                            f"→ {days_after} 天後{ret_str}"
+                        )
+
+                    # 結論
+                    st.markdown("---")
+                    if acc >= 70:
+                        st.markdown("**結論：系統判斷大致可靠，但仍需結合自己的判斷。**")
+                    elif acc >= 50:
+                        st.markdown("**結論：系統判斷正確率一般，建議搭配其他資訊使用。**")
+                    else:
+                        st.markdown("**結論：這段期間系統判斷偏差較大，可能需要調整參數。**")
                 else:
-                    st.warning("資料不足，無法回顧（可能日期太近或資料抓取失敗）")
+                    st.warning("無法驗證 — 可能日期太近（股價還沒走出來）或資料抓取失敗。至少要等 5 個交易日才能驗證。")
