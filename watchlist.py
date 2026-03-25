@@ -1,9 +1,11 @@
 """
 觀察清單
 你可以自由新增、刪除或修改這裡的股票
+臺股用數字代號（2330），美股用英文代號（AAPL）
 """
 
 WATCHLIST = {
+    # ===== 臺股 =====
     "ETF": [
         "0050",   # 元大台灣50
         "0056",   # 元大高股息
@@ -73,5 +75,37 @@ WATCHLIST = {
     "觀光/零售": [
         "2707",   # 晶華
         "2731",   # 雄獅
+    ],
+
+    # ===== 美股 =====
+    "美股/科技巨頭": [
+        "AAPL",   # Apple
+        "MSFT",   # Microsoft
+        "GOOGL",  # Google
+        "AMZN",   # Amazon
+        "META",   # Meta
+        "NVDA",   # NVIDIA
+        "TSLA",   # Tesla
+    ],
+    "美股/半導體": [
+        "AMD",    # AMD
+        "AVGO",   # Broadcom
+        "QCOM",   # Qualcomm
+        "INTC",   # Intel
+    ],
+    "美股/AI軟體": [
+        "CRM",    # Salesforce
+        "PLTR",   # Palantir
+        "SNOW",   # Snowflake
+    ],
+    "美股/ETF": [
+        "SPY",    # S&P 500
+        "QQQ",    # Nasdaq 100
+        "SOXX",   # 半導體ETF
+    ],
+    "美股/消費": [
+        "COST",   # Costco
+        "NKE",    # Nike
+        "SBUX",   # Starbucks
     ],
 }
