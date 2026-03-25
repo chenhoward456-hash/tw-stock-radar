@@ -78,18 +78,22 @@ if page == "🔍 個股分析":
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        stock_id = st.text_input("股票代號", value="2330", placeholder="例：2330")
+        stock_id = st.text_input("股票代號", value="2330", placeholder="臺股：2330 ｜ 美股：TSLA, AAPL, NVDA")
     with col2:
         budget = st.number_input("投資預算（選填）", value=TOTAL_BUDGET, step=100000, format="%d")
 
     if st.button("開始分析", type="primary", use_container_width=True):
+        import market
+        stock_id = stock_id.strip().upper()
+        is_us = market.is_us(stock_id)
+
         with st.spinner("抓取資料中..."):
-            name = fetch_stock_name(stock_id, TOKEN)
-            ind = fetch_stock_industry(stock_id, TOKEN)
-            price_df = fetch_stock_price(stock_id, token=TOKEN)
-            inst_df = fetch_institutional(stock_id, token=TOKEN)
-            per_df = fetch_per_pbr(stock_id, token=TOKEN)
-            rev_df = fetch_monthly_revenue(stock_id, token=TOKEN)
+            name = market.fetch_stock_name(stock_id)
+            ind = market.fetch_stock_industry(stock_id)
+            price_df = market.fetch_stock_price(stock_id)
+            inst_df = market.fetch_institutional(stock_id)
+            per_df = market.fetch_per_pbr(stock_id)
+            rev_df = market.fetch_monthly_revenue(stock_id)
             news_result = news.analyze(stock_id, name)
 
         with st.spinner("分析中..."):
@@ -379,25 +383,36 @@ elif page == "💼 持倉監控":
 
     # 顯示現有持倉 + 刪除按鈕
     if HOLDINGS:
-        st.markdown("### 目前持倉")
+        st.markdown("### 目前持倉（可直接編輯）")
+        changed = False
         for idx, h in enumerate(HOLDINGS):
-            hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([1.5, 1, 1, 1, 1, 0.8])
-            with hc1:
-                st.text(f"{h['stock_id']}")
-            with hc2:
-                st.text(f"買 {h['buy_price']}")
-            with hc3:
-                st.text(f"{h['shares']} 股")
-            with hc4:
-                st.text(h["buy_date"])
-            with hc5:
-                sl = h.get("stop_loss", 0)
-                st.text(f"停損 {sl}" if sl > 0 else "未設停損")
-            with hc6:
-                if st.button("🗑", key=f"del_{idx}"):
-                    HOLDINGS.pop(idx)
-                    _save_holdings(HOLDINGS)
-                    st.rerun()
+            with st.expander(f"📌 {h['stock_id']}　買 {h['buy_price']}　{h['shares']} 股　停損 {h.get('stop_loss', 0)}"):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    new_bp = st.number_input("買入價", value=float(h["buy_price"]), step=1.0, key=f"bp_{idx}", format="%.1f")
+                    new_sh = st.number_input("股數", value=int(h["shares"]), step=100, key=f"sh_{idx}")
+                with ec2:
+                    new_sl = st.number_input("停損價（0=不設）", value=float(h.get("stop_loss", 0)), step=1.0, key=f"sl_{idx}", format="%.1f")
+                    new_dt = st.text_input("買入日期", value=h["buy_date"], key=f"dt_{idx}")
+
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("💾 儲存修改", key=f"save_{idx}", use_container_width=True):
+                        HOLDINGS[idx]["buy_price"] = new_bp
+                        HOLDINGS[idx]["shares"] = new_sh
+                        HOLDINGS[idx]["stop_loss"] = new_sl
+                        HOLDINGS[idx]["buy_date"] = new_dt
+                        _save_holdings(HOLDINGS)
+                        st.success("已儲存！")
+                        changed = True
+                with bc2:
+                    if st.button("🗑 刪除", key=f"del_{idx}", use_container_width=True):
+                        HOLDINGS.pop(idx)
+                        _save_holdings(HOLDINGS)
+                        st.rerun()
+
+            if changed:
+                st.rerun()
 
         st.markdown("---")
 
