@@ -316,16 +316,93 @@ elif page == "⚔ 股票 PK":
 elif page == "💼 持倉監控":
     st.title("💼 持倉監控")
 
-    from holdings import HOLDINGS
     import correlation
+    import json as _json
+
+    HOLDINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+
+    def _load_holdings():
+        """從 holdings.py 讀取持倉"""
+        try:
+            # 重新讀取檔案（避免 import cache）
+            _vars = {}
+            with open(HOLDINGS_PATH, "r", encoding="utf-8") as f:
+                exec(f.read(), _vars)
+            return _vars.get("HOLDINGS", [])
+        except Exception:
+            return []
+
+    def _save_holdings(holdings):
+        """儲存持倉到 holdings.py"""
+        lines = ['"""', '你的持倉清單', '"""', '', 'HOLDINGS = [']
+        for h in holdings:
+            parts = []
+            parts.append(f'"stock_id": "{h["stock_id"]}"')
+            parts.append(f'"buy_price": {h["buy_price"]}')
+            parts.append(f'"shares": {h["shares"]}')
+            parts.append(f'"buy_date": "{h["buy_date"]}"')
+            parts.append(f'"stop_loss": {h.get("stop_loss", 0)}')
+            lines.append("    {" + ", ".join(parts) + "},")
+        lines.append("]")
+        lines.append("")
+        with open(HOLDINGS_PATH, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+    HOLDINGS = _load_holdings()
+
+    # ===== 新增持倉表單 =====
+    with st.expander("➕ 新增 / 修改持倉", expanded=not HOLDINGS):
+        with st.form("add_holding"):
+            st.markdown("**新增一筆持倉**")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                new_id = st.text_input("股票代號", placeholder="例：2330")
+                new_price = st.number_input("買入價（元）", min_value=0.0, step=1.0, format="%.1f")
+            with fc2:
+                new_shares = st.number_input("股數", min_value=0, step=100, value=1000)
+                new_date = st.date_input("買入日期")
+
+            new_stop = st.number_input("停損價（選填，0=不設）", min_value=0.0, step=1.0, format="%.1f")
+            submitted = st.form_submit_button("新增", use_container_width=True)
+
+            if submitted and new_id and new_price > 0 and new_shares > 0:
+                HOLDINGS.append({
+                    "stock_id": new_id.strip(),
+                    "buy_price": new_price,
+                    "shares": new_shares,
+                    "buy_date": new_date.strftime("%Y-%m-%d"),
+                    "stop_loss": new_stop,
+                })
+                _save_holdings(HOLDINGS)
+                st.success(f"已新增 {new_id}！重新整理頁面即可看到。")
+                st.rerun()
+
+    # 顯示現有持倉 + 刪除按鈕
+    if HOLDINGS:
+        st.markdown("### 目前持倉")
+        for idx, h in enumerate(HOLDINGS):
+            hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([1.5, 1, 1, 1, 1, 0.8])
+            with hc1:
+                st.text(f"{h['stock_id']}")
+            with hc2:
+                st.text(f"買 {h['buy_price']}")
+            with hc3:
+                st.text(f"{h['shares']} 股")
+            with hc4:
+                st.text(h["buy_date"])
+            with hc5:
+                sl = h.get("stop_loss", 0)
+                st.text(f"停損 {sl}" if sl > 0 else "未設停損")
+            with hc6:
+                if st.button("🗑", key=f"del_{idx}"):
+                    HOLDINGS.pop(idx)
+                    _save_holdings(HOLDINGS)
+                    st.rerun()
+
+        st.markdown("---")
 
     if not HOLDINGS:
-        st.info("你還沒有設定持倉。請到 `holdings.py` 加入你的持股。")
-        st.code('''# 範例：
-HOLDINGS = [
-    {"stock_id": "2330", "buy_price": 1850, "shares": 100, "buy_date": "2026-03-20"},
-    {"stock_id": "2357", "buy_price": 560, "shares": 200, "buy_date": "2026-03-25"},
-]''', language="python")
+        st.info("還沒有持倉，用上面的表單新增吧。")
     else:
         if st.button("檢查持倉", type="primary", use_container_width=True):
             from monitor import check_holding
