@@ -57,7 +57,16 @@ def check_holding(h):
         pnl_pct = 0
         pnl_amount = 0
 
+    stop_loss = h.get("stop_loss", 0)
+
     warnings = []
+
+    # 0. 停損價警告（最優先）
+    if stop_loss > 0 and current_price > 0 and current_price <= stop_loss:
+        warnings.append(f"🚨 已觸及停損價 {stop_loss} 元！現價 {current_price:.0f} 元，請立即處理")
+    elif stop_loss > 0 and current_price > 0 and current_price <= stop_loss * 1.03:
+        gap_pct = (current_price / stop_loss - 1) * 100
+        warnings.append(f"⚠ 接近停損價 {stop_loss} 元（距離僅 {gap_pct:.1f}%），請留意")
 
     # 1. 綜合評分跌到紅燈
     if avg < 4:
