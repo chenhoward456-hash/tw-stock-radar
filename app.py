@@ -24,7 +24,7 @@ import tracker
 from scoring import STRATEGIES, weighted_score
 from watchlist import WATCHLIST
 
-st.set_page_config(page_title="臺股雷達", page_icon="📊", layout="wide")
+st.set_page_config(page_title="投資雷達", page_icon="📊", layout="wide")
 
 SIGNAL_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
@@ -38,8 +38,10 @@ def overall_signal(score):
 
 
 # ===== 側欄 =====
-st.sidebar.title("📊 臺股雷達")
+st.sidebar.title("📊 投資雷達")
+st.sidebar.caption("臺股 + 美股")
 page = st.sidebar.radio("功能", [
+    "🏠 今日焦點",
     "🔍 個股分析",
     "📡 觀察清單掃描",
     "⚔ 股票 PK",
@@ -62,8 +64,103 @@ st.sidebar.markdown("---")
 st.sidebar.caption("⚠ 僅供參考，不構成投資建議")
 
 
+# ===== 今日焦點 =====
+if page == "🏠 今日焦點":
+    st.title("🏠 今日焦點")
+    st.caption("打開就知道今天該關注什麼 — 不用看 145 檔，系統幫你篩好了")
+
+    # 讀最近的掃描記錄
+    last_records = tracker.list_records()
+    has_scan = bool(last_records)
+
+    # 持倉狀況
+    import holdings as _h
+    HOLDINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+    try:
+        _vars = {}
+        with open(HOLDINGS_PATH, "r", encoding="utf-8") as f:
+            exec(f.read(), _vars)
+        _holdings = _vars.get("HOLDINGS", [])
+    except Exception:
+        _holdings = []
+
+    if _holdings:
+        st.markdown("### 🚨 持倉狀況")
+        from monitor import check_holding
+        for h in _holdings:
+            try:
+                r = check_holding(h)
+                pnl = f"{r['pnl_pct']:+.1f}%"
+                if r["warnings"]:
+                    st.error(f"**{r['stock_id']} {r['name']}**　損益 {pnl}　評分 {r['avg']}/10")
+                    for w in r["warnings"][:2]:
+                        st.caption(f"　　{w}")
+                else:
+                    st.success(f"**{r['stock_id']} {r['name']}**　損益 {pnl}　評分 {r['avg']}/10 — 正常")
+            except Exception:
+                pass
+
+    st.markdown("---")
+
+    if has_scan:
+        # 從最近一次掃描找亮點
+        record = tracker.load_record(last_records[0])
+        if record:
+            results = record["results"]
+            scan_date = record["date"]
+
+            greens = [r for r in results if r["avg"] >= 7]
+            watch = [r for r in results if 6 <= r["avg"] < 7]
+            reds = [r for r in results if r["avg"] < 4]
+
+            st.markdown(f"### 📡 最近掃描（{scan_date}）")
+
+            if greens:
+                st.markdown("**🟢 系統推薦關注這幾檔：**")
+                for r in sorted(greens, key=lambda x: x["avg"], reverse=True):
+                    st.markdown(f"- **{r['stock_id']} {r['name']}**（{r['avg']}/10）— {r.get('sector', '')}")
+                st.caption("→ 點左邊「個股分析」輸入代號看完整報告")
+            else:
+                st.info("目前沒有 7 分以上的綠燈股，建議耐心等待。")
+
+            if watch:
+                with st.expander(f"🟡 值得留意（{len(watch)} 檔）"):
+                    for r in sorted(watch, key=lambda x: x["avg"], reverse=True):
+                        st.markdown(f"- {r['stock_id']} {r['name']}（{r['avg']}/10）")
+
+            if reds:
+                with st.expander(f"🔴 偏空（{len(reds)} 檔）— 不要碰"):
+                    for r in sorted(reds, key=lambda x: x["avg"]):
+                        st.markdown(f"- {r['stock_id']} {r['name']}（{r['avg']}/10）")
+
+            # 板塊快覽
+            st.markdown("### 📊 板塊強弱")
+            import pandas as _pd
+            sector_scores = {}
+            for r in results:
+                s = r.get("sector", "未分類")
+                if s not in sector_scores:
+                    sector_scores[s] = []
+                sector_scores[s].append(r["avg"])
+
+            sector_avg = {s: round(sum(v) / len(v), 1) for s, v in sector_scores.items()}
+            sector_df = _pd.Series(sector_avg).sort_values(ascending=False)
+            st.bar_chart(sector_df)
+
+    else:
+        st.warning("還沒有掃描記錄。先到「📡 觀察清單掃描」跑一次，或等每天 15:30 自動排程。")
+
+    st.markdown("---")
+    st.markdown("### 💡 今天該做什麼？")
+    st.markdown("""
+1. 看上面有沒有 🟢 綠燈股 → 有的話點「個股分析」深入看
+2. 持倉有 🚨 警告 → 認真評估要不要處理
+3. 都沒事 → 關掉，明天再來看
+    """)
+
+
 # ===== 個股分析 =====
-if page == "🔍 個股分析":
+elif page == "🔍 個股分析":
     st.title("🔍 個股分析")
 
     col1, col2 = st.columns([2, 1])
