@@ -6,6 +6,7 @@
 import sys
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,7 +30,11 @@ def scan_one(stock_id):
         industry = market.fetch_stock_industry(stock_id)
 
         tech = technical.analyze(price_df)
-        fund = fundamental.analyze(per_df, rev_df, industry)
+        if market.is_etf(stock_id):
+            etf_info = market.fetch_etf_info(stock_id)
+            fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+        else:
+            fund = fundamental.analyze(per_df, rev_df, industry)
         inst = institutional.analyze(inst_df)
 
         avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
@@ -161,27 +166,30 @@ def main():
     names = market.fetch_stock_names(all_stocks)
     print(f" → 完成\n")
 
-    # 逐一掃描
+    # 多線程並行掃描（5 條線程同時跑）
     results = []
-    for i, stock_id in enumerate(all_stocks):
-        name = names.get(stock_id, stock_id)
-        print(f" [{i+1:>2}/{total}] {stock_id} {name}...", end="", flush=True)
+    done_count = 0
 
+    def _scan_with_info(stock_id):
         data = scan_one(stock_id)
-
         if data:
             data["stock_id"] = stock_id
-            data["name"] = name
+            data["name"] = names.get(stock_id, stock_id)
             data["sector"] = stock_sectors[stock_id]
-            results.append(data)
-            icon = SIGNAL_ICON[data["overall"]]
-            print(f" {icon} {data['avg']}")
-        else:
-            print(" ⚠ 失敗")
+        return stock_id, data
 
-        # 避免打太快被限速
-        if i < total - 1:
-            time.sleep(0.3)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(_scan_with_info, sid): sid for sid in all_stocks}
+        for future in as_completed(futures):
+            done_count += 1
+            stock_id, data = future.result()
+            name = names.get(stock_id, stock_id)
+            if data:
+                results.append(data)
+                icon = SIGNAL_ICON[data["overall"]]
+                print(f" [{done_count:>2}/{total}] {stock_id} {name} {icon} {data['avg']}")
+            else:
+                print(f" [{done_count:>2}/{total}] {stock_id} {name} ⚠ 失敗")
 
     if not results:
         print("\n ⚠ 沒有取得任何資料，請檢查網路或 FinMind Token 設定")

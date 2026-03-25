@@ -100,7 +100,11 @@ def do_check(stock_id):
     news_result = news.analyze(stock_id, name)
 
     tech = technical.analyze(price_df)
-    fund = fundamental.analyze(per_df, rev_df, industry)
+    if market.is_etf(stock_id):
+        etf_info = market.fetch_etf_info(stock_id)
+        fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+    else:
+        fund = fundamental.analyze(per_df, rev_df, industry)
     inst = institutional.analyze(inst_df)
 
     scores = [tech["score"], fund["score"], inst["score"], news_result["score"]]
@@ -194,7 +198,11 @@ def do_scan():
             industry = market.fetch_stock_industry(stock_id)
 
             tech = technical.analyze(price_df)
-            fund = fundamental.analyze(per_df, rev_df, industry)
+            if market.is_etf(stock_id):
+                etf_info = market.fetch_etf_info(stock_id)
+                fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+            else:
+                fund = fundamental.analyze(per_df, rev_df, industry)
             inst = institutional.analyze(inst_df)
 
             avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
@@ -259,7 +267,11 @@ def do_compare(id_a, id_b):
         inst_df = market.fetch_institutional(sid)
         rev_df = market.fetch_monthly_revenue(sid)
         tech = technical.analyze(price_df)
-        fund = fundamental.analyze(per_df, rev_df, industry)
+        if market.is_etf(sid):
+            etf_info = market.fetch_etf_info(sid)
+            fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+        else:
+            fund = fundamental.analyze(per_df, rev_df, industry)
         inst = institutional.analyze(inst_df)
         avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
         return {"tech": tech["score"], "fund": fund["score"], "inst": inst["score"], "avg": avg}

@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: 安裝依賴
-        run: pip install requests pandas numpy anthropic
+        run: pip install requests pandas numpy anthropic yfinance
 
       - name: 建立 config.py
         run: |

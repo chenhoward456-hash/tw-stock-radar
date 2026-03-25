@@ -32,7 +32,11 @@ def check_holding(h):
     rev_df = market.fetch_monthly_revenue(sid)
 
     tech = technical.analyze(price_df)
-    fund = fundamental.analyze(per_df, rev_df, industry)
+    if market.is_etf(sid):
+        etf_info = market.fetch_etf_info(sid)
+        fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+    else:
+        fund = fundamental.analyze(per_df, rev_df, industry)
     inst = institutional.analyze(inst_df)
 
     avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)

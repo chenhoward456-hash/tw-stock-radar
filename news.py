@@ -23,12 +23,18 @@ NEGATIVE = [
 ]
 
 
-def fetch_news(query, max_items=20):
+def fetch_news(query, max_items=20, lang="zh"):
     """從 Google News RSS 抓取新聞標題"""
-    url = (
-        f"https://news.google.com/rss/search?"
-        f"q={quote(query)}+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    )
+    if lang == "en":
+        url = (
+            f"https://news.google.com/rss/search?"
+            f"q={quote(query)}+when:7d&hl=en-US&gl=US&ceid=US:en"
+        )
+    else:
+        url = (
+            f"https://news.google.com/rss/search?"
+            f"q={quote(query)}+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        )
     try:
         resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
@@ -50,13 +56,29 @@ def fetch_news(query, max_items=20):
         return []
 
 
-def _keyword_score(articles):
+POSITIVE_EN = [
+    "surge", "rally", "soar", "bullish", "upbeat", "beat", "growth",
+    "profit", "revenue up", "buy", "upgrade", "strong", "recovery",
+    "rebound", "record high", "outperform", "exceed", "boost", "gain",
+]
+NEGATIVE_EN = [
+    "drop", "fall", "plunge", "bearish", "downbeat", "miss", "decline",
+    "loss", "revenue down", "sell", "downgrade", "weak", "recession",
+    "crash", "record low", "underperform", "warning", "risk", "layoff",
+    "cut", "slump", "fear",
+]
+
+
+def _keyword_score(articles, is_us=False):
     """關鍵字比對情緒分析（備案）"""
+    pos_words = POSITIVE_EN if is_us else POSITIVE
+    neg_words = NEGATIVE_EN if is_us else NEGATIVE
+
     pos, neg = 0, 0
     for a in articles:
-        t = a["title"]
-        pos += sum(1 for w in POSITIVE if w in t)
-        neg += sum(1 for w in NEGATIVE if w in t)
+        t = a["title"].lower()
+        pos += sum(1 for w in pos_words if w in t)
+        neg += sum(1 for w in neg_words if w in t)
 
     total = pos + neg
     if total == 0:
@@ -78,19 +100,28 @@ def _ai_score(stock_id, stock_name, articles):
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
         headlines = "\n".join([f"- {a['title']}" for a in articles[:10]])
 
+        # 美股用英文新聞但回答用中文
+        if _is_us_symbol(stock_id):
+            prompt = (
+                f"你是股市分析師。以下是近7天關於 {stock_name}（{stock_id}）的英文新聞標題：\n\n"
+                f"{headlines}\n\n"
+                "請分析整體情緒並用中文回答（只回答這兩行，不要多說）：\n"
+                "評分：[1-10的數字，1=極負面 5=中性 10=極正面]\n"
+                "總結：[一句話中文總結消息面狀況，20字以內]"
+            )
+        else:
+            prompt = (
+                f"你是臺股分析師。以下是近7天關於「{stock_name}」({stock_id}) 的新聞標題：\n\n"
+                f"{headlines}\n\n"
+                "請分析整體情緒並回答（只回答這兩行，不要多說）：\n"
+                "評分：[1-10的數字，1=極負面 5=中性 10=極正面]\n"
+                "總結：[一句話總結消息面狀況，20字以內]"
+            )
+
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"你是臺股分析師。以下是近7天關於「{stock_name}」({stock_id}) 的新聞標題：\n\n"
-                    f"{headlines}\n\n"
-                    "請分析整體情緒並回答（只回答這兩行，不要多說）：\n"
-                    "評分：[1-10的數字，1=極負面 5=中性 10=極正面]\n"
-                    "總結：[一句話總結消息面狀況，20字以內]"
-                ),
-            }],
+            messages=[{"role": "user", "content": prompt}],
         )
 
         text = response.content[0].text
@@ -113,6 +144,14 @@ def _ai_score(stock_id, stock_name, articles):
         return None
 
 
+def _is_us_symbol(symbol):
+    """簡易判斷是否為美股"""
+    if not symbol:
+        return False
+    cleaned = symbol.replace("-", "").replace(".", "")
+    return cleaned.isalpha()
+
+
 def analyze(stock_id, stock_name):
     """
     消息面分析
@@ -120,7 +159,13 @@ def analyze(stock_id, stock_name):
     """
     result = {"signal": "yellow", "score": 5.0, "details": []}
 
-    articles = fetch_news(stock_name)
+    # 美股用英文搜股票代號，台股用中文搜股票名稱
+    is_us = _is_us_symbol(stock_id)
+    if is_us:
+        # 美股：用代號搜英文新聞（例如 "NVDA stock"）
+        articles = fetch_news(f"{stock_id} stock", lang="en")
+    else:
+        articles = fetch_news(stock_name, lang="zh")
 
     if not articles:
         result["details"].append("⚠ 無法取得近期新聞（可能被暫時限制）")
@@ -138,7 +183,7 @@ def analyze(stock_id, stock_name):
         if summary:
             details.append(f"— AI 判斷：{summary}")
     else:
-        score, pos, neg, _ = _keyword_score(articles)
+        score, pos, neg, _ = _keyword_score(articles, is_us=is_us)
         details.append("— 分析方式：關鍵字比對")
         details.append(f"— 正面關鍵字 {pos} 次 / 負面關鍵字 {neg} 次")
 

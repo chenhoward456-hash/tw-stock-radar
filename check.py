@@ -57,7 +57,11 @@ def check(stock_id, budget=0):
     # 分析
     print("\n⚙ 分析中...\n")
     tech = technical.analyze(price_df)
-    fund = fundamental.analyze(per_df, rev_df, industry)
+    if market.is_etf(stock_id):
+        etf_info = market.fetch_etf_info(stock_id)
+        fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+    else:
+        fund = fundamental.analyze(per_df, rev_df, industry)
     inst = institutional.analyze(inst_df)
 
     # 資金配置

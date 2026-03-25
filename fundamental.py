@@ -18,6 +18,21 @@ INDUSTRY_PE = {
     "營建":       (6, 10, 15),
 }
 
+# 美股 Sector PE 基準（yfinance 回傳的英文 sector 名稱）
+US_SECTOR_PE = {
+    "Technology":           (20, 28, 38),
+    "Consumer Cyclical":    (15, 22, 30),
+    "Communication Services": (15, 20, 28),
+    "Healthcare":           (18, 25, 40),
+    "Financial Services":   (8, 13, 18),
+    "Industrials":          (12, 18, 25),
+    "Consumer Defensive":   (15, 20, 28),
+    "Energy":               (8, 12, 20),
+    "Utilities":            (12, 17, 22),
+    "Real Estate":          (20, 30, 45),
+    "Basic Materials":      (8, 14, 20),
+}
+
 # FinMind 產業名稱 → 大分類
 _INDUSTRY_MAP = {
     "半導體": "半導體",
@@ -49,6 +64,122 @@ _INDUSTRY_MAP = {
 }
 
 
+def analyze_etf(price_df, etf_info=None, per_df=None):
+    """
+    ETF 專用基本面分析
+    用殖利率 + 費用率 + 52週位置 + 折溢價取代本益比和月營收
+    """
+    result = {"signal": "yellow", "score": 5, "details": []}
+    score = 5.0
+    details = []
+    details.append("— ETF 專用評估（不看本益比和月營收）")
+
+    # ===== 殖利率 =====
+    dy = 0
+    if etf_info and etf_info.get("dividend_yield"):
+        dy = etf_info["dividend_yield"]
+    elif per_df is not None and not per_df.empty and "dividend_yield" in per_df.columns:
+        dy_vals = pd.to_numeric(per_df["dividend_yield"], errors="coerce")
+        dy_valid = dy_vals[dy_vals > 0]
+        if not dy_valid.empty:
+            dy = float(dy_valid.iloc[-1])
+
+    if dy > 0:
+        if dy > 6:
+            details.append(f"✓ 殖利率 {dy:.1f}%（高配息）")
+            score += 2
+        elif dy > 4:
+            details.append(f"✓ 殖利率 {dy:.1f}%（不錯）")
+            score += 1
+        elif dy > 2:
+            details.append(f"— 殖利率 {dy:.1f}%（一般）")
+        else:
+            details.append(f"— 殖利率 {dy:.1f}%（偏低，可能是成長型 ETF）")
+    else:
+        details.append("— 無殖利率資料（成長型 ETF 或資料缺失）")
+
+    # ===== 費用率（美股 ETF 才有）=====
+    if etf_info and etf_info.get("expense_ratio"):
+        er = etf_info["expense_ratio"]
+        if er < 0.1:
+            details.append(f"✓ 內扣費用 {er:.2f}%（極低）")
+            score += 1
+        elif er < 0.3:
+            details.append(f"✓ 內扣費用 {er:.2f}%（合理）")
+            score += 0.5
+        elif er < 0.75:
+            details.append(f"— 內扣費用 {er:.2f}%（中等）")
+        else:
+            details.append(f"⚠ 內扣費用 {er:.2f}%（偏高）")
+            score -= 1
+
+    # ===== 52 週價格位置 =====
+    if not price_df.empty and "close" in price_df.columns:
+        closes = pd.to_numeric(price_df["close"], errors="coerce").dropna()
+        if len(closes) >= 20:
+            current = closes.iloc[-1]
+            high_52 = closes.max()
+            low_52 = closes.min()
+            if high_52 > low_52:
+                position = (current - low_52) / (high_52 - low_52) * 100
+                if position < 25:
+                    details.append(f"✓ 在 52 週低點附近（位置 {position:.0f}%），可能是好買點")
+                    score += 1.5
+                elif position < 40:
+                    details.append(f"✓ 在 52 週偏低區（位置 {position:.0f}%）")
+                    score += 0.5
+                elif position > 90:
+                    details.append(f"⚠ 接近 52 週高點（位置 {position:.0f}%），追高風險")
+                    score -= 1.5
+                elif position > 75:
+                    details.append(f"— 在 52 週偏高區（位置 {position:.0f}%）")
+                    score -= 0.5
+                else:
+                    details.append(f"— 52 週價格位置 {position:.0f}%（中間區域）")
+
+    # ===== 折溢價（如果有 NAV）=====
+    if etf_info and etf_info.get("nav_price") and etf_info.get("current_price"):
+        nav = etf_info["nav_price"]
+        price = etf_info["current_price"]
+        if nav > 0:
+            premium = (price / nav - 1) * 100
+            if premium > 2:
+                details.append(f"⚠ 溢價 {premium:.1f}%（買貴了）")
+                score -= 1
+            elif premium < -2:
+                details.append(f"✓ 折價 {abs(premium):.1f}%（相對便宜）")
+                score += 1
+            else:
+                details.append(f"— 折溢價 {premium:+.1f}%（接近淨值）")
+
+    # ===== 規模（美股 ETF 才有）=====
+    if etf_info and etf_info.get("total_assets"):
+        assets = etf_info["total_assets"]
+        if assets > 10e9:
+            details.append(f"✓ 基金規模 {assets / 1e9:.0f}B USD（大型，流動性佳）")
+        elif assets > 1e9:
+            details.append(f"— 基金規模 {assets / 1e9:.1f}B USD（中型）")
+        elif assets > 100e6:
+            details.append(f"— 基金規模 {assets / 1e6:.0f}M USD（小型）")
+        else:
+            details.append(f"⚠ 基金規模偏小（{assets / 1e6:.0f}M USD），流動性風險")
+            score -= 1
+
+    # ===== 結算 =====
+    score = max(1.0, min(10.0, score))
+    if score >= 7:
+        signal = "green"
+    elif score >= 4:
+        signal = "yellow"
+    else:
+        signal = "red"
+
+    result["signal"] = signal
+    result["score"] = round(score, 1)
+    result["details"] = details
+    return result
+
+
 def _get_industry_group(industry_category):
     """把 FinMind 的產業細分對應到大類"""
     if not industry_category:
@@ -68,9 +199,15 @@ def analyze(per_df, revenue_df, industry_category=""):
     score = 5.0
     details = []
 
-    # 取得產業基準
+    # 取得產業基準（台股用中文對照，美股直接查英文 sector）
     industry_group = _get_industry_group(industry_category)
     pe_range = INDUSTRY_PE.get(industry_group) if industry_group else None
+
+    # 美股：如果台股對照表找不到，用英文 sector 查
+    if not pe_range and industry_category:
+        pe_range = US_SECTOR_PE.get(industry_category)
+        if pe_range:
+            industry_group = industry_category  # 直接用英文 sector 名
 
     if industry_group:
         details.append(f"— 產業：{industry_category}（{industry_group}類）")

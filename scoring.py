@@ -28,13 +28,22 @@ STRATEGIES = {
 }
 
 
-def weighted_score(tech_score, fund_score, inst_score, news_score, strategy="balanced"):
+def weighted_score(tech_score, fund_score, inst_score, news_score, strategy="balanced", is_us=False):
     """
     根據策略計算加權綜合分數
+    is_us=True 時自動降低籌碼面權重（美股無真實法人買賣超資料）
     回傳：(加權分數, 策略資訊 dict)
     """
     config = STRATEGIES.get(strategy, STRATEGIES["balanced"])
-    w = config["weights"]
+    w = dict(config["weights"])  # 複製一份，避免改到原始設定
+
+    if is_us:
+        # 美股籌碼資料不可靠 → 把籌碼權重分給技術和基本面
+        inst_w = w["inst"]
+        w["inst"] = 0.05  # 保留極小權重
+        bonus = inst_w - 0.05
+        w["tech"] += bonus * 0.5
+        w["fund"] += bonus * 0.5
 
     score = (
         tech_score * w["tech"]

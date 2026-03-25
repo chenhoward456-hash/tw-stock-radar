@@ -61,6 +61,9 @@ strategy_key = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
+from config import FINMIND_TOKEN
+if not FINMIND_TOKEN:
+    st.sidebar.warning("台股資料限速中（未設 FinMind Token）。到 config.py 填入免費 Token 可提升 10 倍速度。")
 st.sidebar.caption("⚠ 僅供參考，不構成投資建議")
 
 
@@ -172,6 +175,7 @@ elif page == "🔍 個股分析":
     if st.button("開始分析", type="primary", use_container_width=True):
         stock_id = stock_id.strip().upper()
         is_us = market.is_us(stock_id)
+        etf = market.is_etf(stock_id)
 
         with st.spinner("抓取資料中..."):
             name = market.fetch_stock_name(stock_id)
@@ -181,14 +185,19 @@ elif page == "🔍 個股分析":
             per_df = market.fetch_per_pbr(stock_id)
             rev_df = market.fetch_monthly_revenue(stock_id)
             news_result = news.analyze(stock_id, name)
+            etf_info = market.fetch_etf_info(stock_id) if etf else None
 
         with st.spinner("分析中..."):
             tech = technical.analyze(price_df)
-            fund = fundamental.analyze(per_df, rev_df, ind)
+            if etf:
+                fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+            else:
+                fund = fundamental.analyze(per_df, rev_df, ind)
             inst = institutional.analyze(inst_df)
 
         avg, strategy_info = weighted_score(
-            tech["score"], fund["score"], inst["score"], news_result["score"], strategy_key
+            tech["score"], fund["score"], inst["score"], news_result["score"], strategy_key,
+            is_us=is_us,
         )
         signal = overall_signal(avg)
 
@@ -268,6 +277,8 @@ elif page == "📡 觀察清單掃描":
     st.title("📡 觀察清單掃描")
 
     if st.button("開始掃描", type="primary", use_container_width=True):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         all_stocks = []
         stock_sectors = {}
         for sector, codes in WATCHLIST.items():
@@ -280,39 +291,51 @@ elif page == "📡 觀察清單掃描":
         progress = st.progress(0, text="載入中...")
         results = []
 
-        for i, stock_id in enumerate(all_stocks):
+        def _scan_one(stock_id):
+            """單一股票掃描（在線程中執行）"""
             sname = names.get(stock_id, stock_id)
-            progress.progress((i + 1) / total, text=f"掃描 {stock_id} {sname}...")
+            price_df = market.fetch_stock_price(stock_id)
+            per_df = market.fetch_per_pbr(stock_id)
+            inst_df = market.fetch_institutional(stock_id)
+            rev_df = market.fetch_monthly_revenue(stock_id)
+            ind = market.fetch_stock_industry(stock_id)
+            etf = market.is_etf(stock_id)
 
-            try:
-                price_df = market.fetch_stock_price(stock_id)
-                per_df = market.fetch_per_pbr(stock_id)
-                inst_df = market.fetch_institutional(stock_id)
-                rev_df = market.fetch_monthly_revenue(stock_id)
-                ind = market.fetch_stock_industry(stock_id)
-
-                tech = technical.analyze(price_df)
+            tech = technical.analyze(price_df)
+            if etf:
+                etf_info = market.fetch_etf_info(stock_id)
+                fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+            else:
                 fund = fundamental.analyze(per_df, rev_df, ind)
-                inst_result = institutional.analyze(inst_df)
+            inst_result = institutional.analyze(inst_df)
 
-                avg, _ = weighted_score(
-                    tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key
-                )
-                signal = overall_signal(avg)
+            avg, _ = weighted_score(
+                tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key,
+                is_us=market.is_us(stock_id),
+            )
+            signal = overall_signal(avg)
 
-                results.append({
-                    "代號": stock_id,
-                    "名稱": sname,
-                    "板塊": stock_sectors[stock_id],
-                    "技術": tech["score"],
-                    "基本": fund["score"],
-                    "籌碼": inst_result["score"],
-                    "綜合": avg,
-                    "訊號": SIGNAL_EMOJI[signal],
-                })
-            except Exception:
-                pass
-            time.sleep(0.2)
+            return {
+                "代號": stock_id,
+                "名稱": sname,
+                "板塊": stock_sectors[stock_id],
+                "技術": tech["score"],
+                "基本": fund["score"],
+                "籌碼": inst_result["score"],
+                "綜合": avg,
+                "訊號": SIGNAL_EMOJI[signal],
+            }
+
+        done_count = 0
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_scan_one, sid): sid for sid in all_stocks}
+            for future in as_completed(futures):
+                done_count += 1
+                progress.progress(done_count / total, text=f"已完成 {done_count}/{total}...")
+                try:
+                    results.append(future.result())
+                except Exception:
+                    pass
 
         progress.empty()
 
@@ -373,9 +396,14 @@ elif page == "⚔ 股票 PK":
             inst_df = market.fetch_institutional(sid)
             rev_df = market.fetch_monthly_revenue(sid)
             t = technical.analyze(price_df)
-            f = fundamental.analyze(per_df, rev_df, ind)
+            if market.is_etf(sid):
+                etf_info = market.fetch_etf_info(sid)
+                f = fundamental.analyze_etf(price_df, etf_info, per_df)
+            else:
+                f = fundamental.analyze(per_df, rev_df, ind)
             ins = institutional.analyze(inst_df)
-            avg, _ = weighted_score(t["score"], f["score"], ins["score"], 5.0, strategy_key)
+            avg, _ = weighted_score(t["score"], f["score"], ins["score"], 5.0, strategy_key,
+                                   is_us=market.is_us(sid))
             return nm, t["score"], f["score"], ins["score"], avg
 
         with st.spinner("分析中..."):
@@ -641,7 +669,11 @@ elif page == "🔥 題材趨勢":
                         ind = market.fetch_stock_industry(sid)
 
                         tech = technical.analyze(price_df)
-                        fund = fundamental.analyze(per_df, rev_df, ind)
+                        if market.is_etf(sid):
+                            etf_info = market.fetch_etf_info(sid)
+                            fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+                        else:
+                            fund = fundamental.analyze(per_df, rev_df, ind)
                         inst_r = institutional.analyze(inst_df)
 
                         avg = round((tech["score"] + fund["score"] + inst_r["score"]) / 3, 1)
@@ -692,60 +724,131 @@ elif page == "📈 歷史回測":
         bt_days = st.number_input("回測天數", value=500, min_value=100, max_value=1000, step=100)
 
     if st.button("開始回測", type="primary", use_container_width=True):
-        from backtest import generate_signals, calculate_trades
+        from backtest import generate_signals, generate_signals_trend, calculate_trades
 
-        with st.spinner("抓取歷史資料..."):
+        bt_stock = bt_stock.strip().upper()
+        is_us = market.is_us(bt_stock)
+
+        with st.spinner("抓取歷史資料（還原權息價）..."):
             nm = market.fetch_stock_name(bt_stock)
-            price_df = market.fetch_stock_price(bt_stock, days=bt_days)
+            price_df = market.fetch_stock_price_adjusted(bt_stock, days=bt_days)
 
         if price_df.empty or len(price_df) < 60:
             st.error("資料不足，至少需要 60 天")
         else:
             price_df = price_df.sort_values("date").reset_index(drop=True)
-            signals, still_holding = generate_signals(price_df)
-            trades = calculate_trades(signals)
+            close = price_df["close"].astype(float)
+            buy_hold = (close.iloc[-1] / close.iloc[60] - 1) * 100
+
+            # 兩個策略都跑
+            sig_a, hold_a = generate_signals(price_df)
+            trades_a = calculate_trades(sig_a, is_us=is_us)
+
+            sig_b, hold_b = generate_signals_trend(price_df)
+            trades_b = calculate_trades(sig_b, is_us=is_us)
 
             st.markdown(f"### {bt_stock} {nm}")
-            st.caption(f"策略：均線交叉（5日突破20日買，跌破賣）｜含手續費和證交稅")
+            cost_note = "美股零佣金" if is_us else "含手續費和證交稅"
+            st.caption(f"{cost_note} ｜ 使用還原權息價格回測")
 
+            # 股價走勢圖
             chart_df = price_df.copy()
             chart_df["date"] = pd.to_datetime(chart_df["date"])
             chart_df["close"] = chart_df["close"].astype(float)
             chart_df = chart_df.set_index("date")
             st.line_chart(chart_df["close"])
 
-            if trades:
-                trade_data = [{
-                    "#": i + 1,
-                    "買入日": t["buy_date"],
-                    "買入價": t["buy_price"],
-                    "賣出日": t["sell_date"],
-                    "賣出價": t["sell_price"],
-                    "報酬": f"{t['return_pct']:+.1f}%",
-                } for i, t in enumerate(trades)]
-                st.dataframe(pd.DataFrame(trade_data), use_container_width=True, hide_index=True)
-
+            def _calc_stats(trades):
+                if not trades:
+                    return 0, 0, 0.0
                 returns = [t["return_pct"] for t in trades]
                 wins = [r for r in returns if r > 0]
-                total_return = 1
+                total = 1
                 for r in returns:
-                    total_return *= (1 + r / 100)
-                total_return = (total_return - 1) * 100
+                    total *= (1 + r / 100)
+                total = (total - 1) * 100
+                win_rate = len(wins) / len(trades) * 100 if trades else 0
+                return len(trades), win_rate, total
 
-                close = price_df["close"].astype(float)
-                buy_hold = (close.iloc[-1] / close.iloc[20] - 1) * 100
+            n_a, wr_a, ret_a = _calc_stats(trades_a)
+            n_b, wr_b, ret_b = _calc_stats(trades_b)
 
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    st.metric("交易次數", len(trades))
-                with c2:
-                    st.metric("勝率", f"{len(wins)/len(trades)*100:.0f}%")
-                with c3:
-                    st.metric("策略報酬", f"{total_return:+.1f}%")
-                with c4:
-                    st.metric("買進持有", f"{buy_hold:+.1f}%")
+            # ===== 三方對比 =====
+            st.markdown("#### 策略對比")
+            compare = pd.DataFrame({
+                "指標": ["交易次數", "勝率", "累計報酬", "vs 買進持有"],
+                "波段（均線交叉+RSI+停損）": [
+                    f"{n_a}",
+                    f"{wr_a:.0f}%",
+                    f"{ret_a:+.1f}%",
+                    f"{ret_a - buy_hold:+.1f}%",
+                ],
+                "趨勢跟蹤（20/60MA+移動停利）": [
+                    f"{n_b}",
+                    f"{wr_b:.0f}%",
+                    f"{ret_b:+.1f}%",
+                    f"{ret_b - buy_hold:+.1f}%",
+                ],
+                "買進持有": [
+                    "—",
+                    "—",
+                    f"{buy_hold:+.1f}%",
+                    "基準",
+                ],
+            })
+            st.dataframe(compare, use_container_width=True, hide_index=True)
+
+            # 勝負判定
+            best = max(ret_a, ret_b, buy_hold)
+            if best == ret_b:
+                st.success(f"趨勢跟蹤勝出（{ret_b:+.1f}%）— 適合有明確趨勢的股票")
+            elif best == ret_a:
+                st.success(f"波段策略勝出（{ret_a:+.1f}%）— 適合震盪盤的股票")
             else:
-                st.info("此期間沒有產生交易訊號。")
+                st.info(f"買進持有勝出（{buy_hold:+.1f}%）— 這段期間不做比較好")
+
+            # 兩個策略的交易明細（用 tab 切換）
+            tab_a, tab_b = st.tabs(["波段策略明細", "趨勢跟蹤明細"])
+
+            with tab_a:
+                if trades_a:
+                    st.dataframe(pd.DataFrame([{
+                        "#": i + 1,
+                        "買入日": t["buy_date"],
+                        "買入價": round(t["buy_price"], 1),
+                        "賣出日": t["sell_date"],
+                        "賣出價": round(t["sell_price"], 1),
+                        "報酬": f"{t['return_pct']:+.1f}%",
+                        "原因": t.get("sell_reason", ""),
+                    } for i, t in enumerate(trades_a)]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("無交易訊號")
+
+            with tab_b:
+                if trades_b:
+                    st.dataframe(pd.DataFrame([{
+                        "#": i + 1,
+                        "買入日": t["buy_date"],
+                        "買入價": round(t["buy_price"], 1),
+                        "賣出日": t["sell_date"],
+                        "賣出價": round(t["sell_price"], 1),
+                        "報酬": f"{t['return_pct']:+.1f}%",
+                        "原因": t.get("sell_reason", ""),
+                    } for i, t in enumerate(trades_b)]), use_container_width=True, hide_index=True)
+                    if hold_b:
+                        st.caption(f"目前仍持有中（最新價 {close.iloc[-1]:.1f}）")
+                else:
+                    st.info("無交易訊號")
+
+            # 提醒
+            st.markdown("---")
+            st.markdown("""
+**怎麼看？**
+- **趨勢跟蹤**：多頭市場待在場內跟著漲，只在趨勢反轉或從高點回落 10% 時才出場。適合大盤 ETF 和穩定成長股。
+- **波段策略**：頻繁進出抓短線波段，適合震盪股（如 TSLA）。
+- **買進持有**：什麼都不做。如果它贏了，代表這段期間不需要主動操作。
+- 回測是壓力測試，不是預測未來。系統的真正價值在選股和風控。
+""")
 
 
 # ===== 訊號追蹤 =====

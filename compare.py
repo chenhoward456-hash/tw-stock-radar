@@ -26,7 +26,11 @@ def analyze_stock(stock_id):
     ind = market.fetch_stock_industry(stock_id)
 
     tech = technical.analyze(price_df)
-    fund = fundamental.analyze(per_df, rev_df, ind)
+    if market.is_etf(stock_id):
+        etf_info = market.fetch_etf_info(stock_id)
+        fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+    else:
+        fund = fundamental.analyze(per_df, rev_df, ind)
     inst = institutional.analyze(inst_df)
 
     avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)

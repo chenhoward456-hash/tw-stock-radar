@@ -156,3 +156,25 @@ def fetch_monthly_revenue(stock_id, months=15, token=None):
         end.strftime("%Y-%m-%d"),
         token,
     )
+
+
+def fetch_etf_info(stock_id, token=None):
+    """取得台股 ETF 特有資訊（從現有 PER 資料抓殖利率）"""
+    try:
+        per_df = fetch_per_pbr(stock_id, days=365, token=token)
+        dy = 0
+        if not per_df.empty and "dividend_yield" in per_df.columns:
+            dy_vals = pd.to_numeric(per_df["dividend_yield"], errors="coerce")
+            dy_valid = dy_vals[dy_vals > 0]
+            if not dy_valid.empty:
+                dy = float(dy_valid.iloc[-1])
+
+        return {
+            "dividend_yield": dy,
+            "expense_ratio": 0,  # FinMind 免費版沒有費用率
+            "total_assets": 0,
+            "nav_price": 0,
+            "current_price": 0,
+        }
+    except Exception:
+        return {}

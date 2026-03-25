@@ -178,6 +178,24 @@ def analyze(price_df):
     else:
         details.append(f"— 成交量正常（5日/20日均量比 {vol_ratio:.1f}）")
 
+    # ===== 趨勢方向（20MA vs 60MA）=====
+    if len(ma20.dropna()) > 0 and len(ma60.dropna()) > 0:
+        trend_diff = ma20.iloc[-1] - ma60.iloc[-1]
+        if ma20.iloc[-1] > ma60.iloc[-1]:
+            if len(ma20.dropna()) >= 10 and ma20.iloc[-10] <= ma60.iloc[-10]:
+                details.append("✓ 中期趨勢剛轉多（20MA 突破 60MA），動能啟動")
+                score += 1.5
+            else:
+                details.append("✓ 中期趨勢向上（20MA > 60MA）")
+                score += 1
+        else:
+            if len(ma20.dropna()) >= 10 and ma20.iloc[-10] >= ma60.iloc[-10]:
+                details.append("⚠ 中期趨勢剛轉空（20MA 跌破 60MA），小心")
+                score -= 1.5
+            else:
+                details.append("⚠ 中期趨勢向下（20MA < 60MA）")
+                score -= 1
+
     # ===== 近期漲跌幅 =====
     pct_5d = (close.iloc[-1] / close.iloc[-6] - 1) * 100 if len(close) > 5 else 0
     pct_20d = (close.iloc[-1] / close.iloc[-21] - 1) * 100 if len(close) > 20 else 0

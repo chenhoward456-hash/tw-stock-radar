@@ -59,28 +59,100 @@ def fetch_stock_price(symbol, days=150):
 
 
 def fetch_per_pbr(symbol):
-    """取得本益比、本淨比等估值資料"""
+    """取得本益比、本淨比等估值資料（用季報 EPS + 歷史股價算出歷史 PE）"""
     try:
         t = _get_ticker(symbol)
         info = t.info
-
-        per = info.get("trailingPE", info.get("forwardPE", 0))
-        pbr = info.get("priceToBook", 0)
-        dy = info.get("dividendYield", 0)
+        pbr = info.get("priceToBook", 0) or 0
+        dy = info.get("dividendYield", 0) or 0
         if dy:
-            dy = dy * 100  # 轉成百分比
+            dy = dy * 100
 
-        # 建一筆假的 DataFrame 來相容臺股分析模組
+        # 嘗試從季報算歷史 trailing PE
+        rows = _calc_historical_pe(t, pbr, dy)
+        if rows:
+            return pd.DataFrame(rows)
+
+        # fallback：至少回傳當前快照
+        per = info.get("trailingPE", info.get("forwardPE", 0))
         if per and per > 0:
             return pd.DataFrame([{
                 "date": datetime.now().strftime("%Y-%m-%d"),
                 "PER": per,
-                "PBR": pbr or 0,
-                "dividend_yield": dy or 0,
+                "PBR": pbr,
+                "dividend_yield": dy,
             }])
         return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+def _calc_historical_pe(ticker, current_pbr, current_dy):
+    """用季報 EPS + 歷史收盤價，算出每季末的 trailing PE"""
+    try:
+        # 取得季報（通常有 4-8 季）
+        inc = ticker.quarterly_income_stmt
+        if inc is None or inc.empty:
+            return []
+
+        # 找 EPS 欄位（Diluted EPS 優先）
+        eps_key = None
+        for key in ["Diluted EPS", "Basic EPS"]:
+            if key in inc.index:
+                eps_key = key
+                break
+
+        if not eps_key:
+            return []
+
+        eps_series = inc.loc[eps_key].dropna().sort_index()
+        if len(eps_series) < 4:
+            return []
+
+        # 取得歷史股價（涵蓋所有季報日期）
+        earliest = eps_series.index[0]
+        hist = ticker.history(start=earliest.strftime("%Y-%m-%d"))
+        if hist.empty:
+            return []
+
+        rows = []
+        # 從第 4 季開始，每個季末算 trailing 4Q EPS
+        for i in range(3, len(eps_series)):
+            trailing_eps = sum(eps_series.iloc[i - 3 : i + 1])
+            if trailing_eps <= 0:
+                continue
+
+            quarter_date = eps_series.index[i]
+            # 找最接近該季末的收盤價
+            close_prices = hist.loc[:quarter_date.strftime("%Y-%m-%d")]
+            if close_prices.empty:
+                continue
+
+            price = close_prices["Close"].iloc[-1]
+            pe = price / trailing_eps
+
+            rows.append({
+                "date": quarter_date.strftime("%Y-%m-%d"),
+                "PER": round(pe, 2),
+                "PBR": current_pbr,
+                "dividend_yield": current_dy,
+            })
+
+        # 加上「今天」的 PE（用最新股價 + 最近 4 季 EPS）
+        if len(eps_series) >= 4:
+            latest_trailing = sum(eps_series.iloc[-4:])
+            if latest_trailing > 0 and not hist.empty:
+                today_price = hist["Close"].iloc[-1]
+                rows.append({
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "PER": round(today_price / latest_trailing, 2),
+                    "PBR": current_pbr,
+                    "dividend_yield": current_dy,
+                })
+
+        return rows
+    except Exception:
+        return []
 
 
 def fetch_monthly_revenue(symbol):
@@ -145,6 +217,34 @@ def fetch_institutional(symbol):
         return pd.DataFrame()
 
 
+def fetch_etf_info(symbol):
+    """取得 ETF 特有資訊（殖利率、費用率、規模、折溢價）"""
+    try:
+        t = _get_ticker(symbol)
+        info = t.info
+
+        dy = info.get("yield") or info.get("dividendYield") or 0
+        if dy and dy < 1:
+            dy = dy * 100  # 轉百分比
+
+        er = info.get("annualReportExpenseRatio") or 0
+        if er and er < 1:
+            er = er * 100
+
+        return {
+            "dividend_yield": dy,
+            "expense_ratio": er,
+            "total_assets": info.get("totalAssets", 0),
+            "nav_price": info.get("navPrice", 0),
+            "current_price": info.get("regularMarketPrice") or info.get("previousClose", 0),
+        }
+    except Exception:
+        return {}
+
+
 def is_us_stock(symbol):
-    """判斷是不是美股代號"""
-    return bool(symbol) and symbol.isalpha()
+    """判斷是不是美股代號（含 BRK-B 這類帶符號的）"""
+    if not symbol:
+        return False
+    cleaned = symbol.replace("-", "").replace(".", "")
+    return cleaned.isalpha()
