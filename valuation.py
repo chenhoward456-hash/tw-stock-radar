@@ -108,6 +108,44 @@ def _score_revenue_trend(revenue_df, details):
             details.append(f"⚠ 營收趨勢持續向下（{trend:+.1f}%）")
             adj -= 1
 
+    # ===== 營收動能偵測（加速 / 見頂 / 衰退）=====
+    if len(rdf) >= 9:
+        # 把最近 9 期分成三組，看動能方向
+        g1 = rdf.iloc[-9:-6]["revenue"].mean()  # 最早
+        g2 = rdf.iloc[-6:-3]["revenue"].mean()  # 中間
+        g3 = rdf.tail(3)["revenue"].mean()       # 最近
+
+        if g1 > 0 and g2 > 0:
+            growth_early = (g2 / g1 - 1) * 100   # 早期成長率
+            growth_late = (g3 / g2 - 1) * 100     # 近期成長率
+
+            # 判斷是否有高峰月份（近 6 個月最高 vs 最近一個月）
+            recent_6 = rdf.tail(6)["revenue"]
+            peak = recent_6.max()
+            latest = rdf.iloc[-1]["revenue"]
+            drop_from_peak = (latest / peak - 1) * 100 if peak > 0 else 0
+
+            if growth_early > 20 and growth_late < -30:
+                # 早期高速成長 → 近期大幅衰退 = 見頂
+                details.append(f"⚠ 營收動能見頂（早期 {growth_early:+.0f}% → 近期 {growth_late:+.0f}%，高峰已過）")
+                adj -= 2
+            elif growth_late > 20 and growth_early > 0:
+                # 持續加速
+                details.append(f"✓ 營收動能加速中（{growth_early:+.0f}% → {growth_late:+.0f}%）")
+                adj += 1
+            elif growth_late < -20:
+                # 明顯減速
+                details.append(f"⚠ 營收動能減速（{growth_early:+.0f}% → {growth_late:+.0f}%）")
+                adj -= 1
+
+            # 從高峰大幅回落
+            if drop_from_peak < -50:
+                details.append(f"⚠ 最新營收從近6月高峰回落 {drop_from_peak:.0f}%（交屋/出貨潮可能結束）")
+                adj -= 1.5
+            elif drop_from_peak < -30:
+                details.append(f"⚠ 最新營收從近6月高峰回落 {drop_from_peak:.0f}%")
+                adj -= 0.5
+
     return adj
 
 
