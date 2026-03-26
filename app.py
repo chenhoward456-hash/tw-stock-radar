@@ -531,21 +531,21 @@ elif page == "📡 觀察清單掃描":
 
             if not greens.empty:
                 st.success(f"🟢 短線綠燈（{len(greens)} 檔）— 各面向都好")
-                st.dataframe(greens, use_container_width=True, hide_index=True)
+                st.dataframe(greens, use_container_width=True, hide_index=True, height=400)
 
             if not long_opps.empty:
                 st.info(f"📉 長線佈局機會（{len(long_opps)} 檔）— 短線弱但基本面好，逢低佈局")
-                st.dataframe(long_opps[["代號", "名稱", "板塊", "短線", "長線", "訊號"]], use_container_width=True, hide_index=True)
+                st.dataframe(long_opps[["代號", "名稱", "板塊", "短線", "長線", "訊號"]], use_container_width=True, hide_index=True, height=400)
 
             if not watch.empty:
                 st.warning(f"🟡 短線值得關注（{len(watch)} 檔）")
-                st.dataframe(watch, use_container_width=True, hide_index=True)
+                st.dataframe(watch, use_container_width=True, hide_index=True, height=400)
             if not reds.empty:
                 st.error(f"🔴 偏空警示（{len(reds)} 檔）")
-                st.dataframe(reds, use_container_width=True, hide_index=True)
+                st.dataframe(reds, use_container_width=True, hide_index=True, height=400)
 
             st.markdown("### 完整排名")
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
             st.markdown("### 板塊強弱")
             sector_df = df.groupby("板塊")["短線"].mean().round(1).sort_values(ascending=False)
@@ -603,7 +603,7 @@ elif page == "⚔ 股票 PK":
             f"{id_a} {na}": [ta, fa, ia, avg_a],
             f"{id_b} {nb}": [tb, fb, ib, avg_b],
         })
-        st.dataframe(compare_df, use_container_width=True, hide_index=True)
+        st.dataframe(compare_df, use_container_width=True, hide_index=True, height=400)
 
         chart_data = pd.DataFrame({
             na: [ta, fa, ia], nb: [tb, fb, ib],
@@ -899,7 +899,7 @@ elif page == "🔥 題材趨勢":
                         st.error(f"⚠ 這個題材裡的股票目前條件都不好，不建議追")
 
                     display_df = pd.DataFrame(stock_results).drop(columns=["_avg"])
-                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
                 else:
                     st.caption("無法取得個股資料")
 
@@ -989,7 +989,7 @@ elif page == "📈 歷史回測":
                     "基準",
                 ],
             })
-            st.dataframe(compare, use_container_width=True, hide_index=True)
+            st.dataframe(compare, use_container_width=True, hide_index=True, height=400)
 
             # 勝負判定
             best = max(ret_a, ret_b, buy_hold)
@@ -1013,7 +1013,7 @@ elif page == "📈 歷史回測":
                         "賣出價": round(t["sell_price"], 1),
                         "報酬": f"{t['return_pct']:+.1f}%",
                         "原因": t.get("sell_reason", ""),
-                    } for i, t in enumerate(trades_a)]), use_container_width=True, hide_index=True)
+                    } for i, t in enumerate(trades_a)]), use_container_width=True, hide_index=True, height=400)
                 else:
                     st.info("無交易訊號")
 
@@ -1027,7 +1027,7 @@ elif page == "📈 歷史回測":
                         "賣出價": round(t["sell_price"], 1),
                         "報酬": f"{t['return_pct']:+.1f}%",
                         "原因": t.get("sell_reason", ""),
-                    } for i, t in enumerate(trades_b)]), use_container_width=True, hide_index=True)
+                    } for i, t in enumerate(trades_b)]), use_container_width=True, hide_index=True, height=400)
                     if hold_b:
                         st.caption(f"目前仍持有中（最新價 {close.iloc[-1]:.1f}）")
                 else:
