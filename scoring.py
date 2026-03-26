@@ -4,26 +4,32 @@
 """
 
 # 策略權重設定
+# 權重依據：
+# - 回測證明技術面選股沒用（10 檔 0 勝），只適合做風控
+# - 基本面（營收、PE）和消息面才是真正的驅動力
+# - 籌碼面（法人買賣超）有一定參考價值
+# - 兩週後用 calibration.py 自動校準驗證
+
 STRATEGIES = {
     "balanced": {
         "label": "均衡",
-        "description": "四面向平均權重",
-        "weights": {"tech": 0.25, "fund": 0.25, "inst": 0.25, "news": 0.25},
+        "description": "基本面為主，技術面降權（回測校正後）",
+        "weights": {"tech": 0.10, "fund": 0.35, "inst": 0.25, "news": 0.30},
     },
     "short": {
         "label": "短線波段",
-        "description": "重技術面和籌碼面，適合持有 1-4 週",
-        "weights": {"tech": 0.35, "fund": 0.10, "inst": 0.35, "news": 0.20},
+        "description": "重籌碼和消息面，技術面做風控參考",
+        "weights": {"tech": 0.15, "fund": 0.15, "inst": 0.35, "news": 0.35},
     },
     "long": {
         "label": "中長線持有",
-        "description": "重基本面和消息面，適合持有 1 個月以上",
-        "weights": {"tech": 0.15, "fund": 0.35, "inst": 0.20, "news": 0.30},
+        "description": "重基本面和消息面，技術面幾乎不看",
+        "weights": {"tech": 0.05, "fund": 0.40, "inst": 0.20, "news": 0.35},
     },
     "dividend": {
         "label": "存股領息",
         "description": "最重基本面，適合長期存股",
-        "weights": {"tech": 0.10, "fund": 0.50, "inst": 0.15, "news": 0.25},
+        "weights": {"tech": 0.05, "fund": 0.50, "inst": 0.15, "news": 0.30},
     },
     "longterm": {
         "label": "長線佈局",

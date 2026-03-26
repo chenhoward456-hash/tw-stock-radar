@@ -529,9 +529,15 @@ elif page == "📡 觀察清單掃描":
             # 長線佈局機會（短線低但長線高 = 逢低佈局）
             long_opps = df[(df["長線"] >= 7) & (df["短線"] < 7)].sort_values("長線", ascending=False)
 
+            # 短線綠燈但長線低 = 矛盾警告
+            contradictions = df[(df["短線"] >= 7) & (df["長線"] <= 5)]
+
             if not greens.empty:
-                st.success(f"🟢 短線綠燈（{len(greens)} 檔）— 各面向都好")
+                st.success(f"🟢 短線綠燈（{len(greens)} 檔）")
                 st.dataframe(greens, use_container_width=True, hide_index=True, height=400)
+
+                if not contradictions.empty:
+                    st.warning(f"⚠ 其中 {len(contradictions)} 檔短線強但長線弱（基本面撐不久）：{', '.join(contradictions['代號'].tolist())}")
 
             if not long_opps.empty:
                 st.info(f"📉 長線佈局機會（{len(long_opps)} 檔）— 短線弱但基本面好，逢低佈局")
@@ -542,7 +548,7 @@ elif page == "📡 觀察清單掃描":
                 st.dataframe(watch, use_container_width=True, hide_index=True, height=400)
             if not reds.empty:
                 st.error(f"🔴 偏空警示（{len(reds)} 檔）")
-                st.dataframe(reds, use_container_width=True, hide_index=True, height=400)
+                st.dataframe(reds, use_container_width=True, hide_index=True, height=min(400, len(reds) * 38 + 40))
 
             st.markdown("### 完整排名")
             st.dataframe(df, use_container_width=True, hide_index=True, height=400)
