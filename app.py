@@ -107,7 +107,8 @@ if page == "🏠 今日焦點":
     last_records = tracker.list_records()
     has_scan = bool(last_records)
 
-    # 持倉狀況
+    # 持倉狀況（本機讀 holdings.py，雲端讀 secrets）
+    _holdings = []
     HOLDINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
     try:
         _vars = {}
@@ -115,7 +116,13 @@ if page == "🏠 今日焦點":
             exec(f.read(), _vars)
         _holdings = _vars.get("HOLDINGS", [])
     except Exception:
-        _holdings = []
+        pass
+    if not _holdings:
+        try:
+            import json as _json
+            _holdings = _json.loads(st.secrets.get("HOLDINGS_JSON", "[]"))
+        except Exception:
+            _holdings = []
 
     if _holdings:
         st.markdown("### 持倉狀況")
