@@ -36,3 +36,11 @@ jobs:
 
       - name: 執行掃描並推送 LINE
         run: python notify.py
+
+      - name: 把掃描結果 commit 回 repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/signals/*.json || true
+          git diff --staged --quiet || git commit -m "自動掃描結果 $(date +%Y-%m-%d)"
+          git push || true

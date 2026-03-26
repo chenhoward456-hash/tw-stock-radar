@@ -49,6 +49,7 @@ page = st.sidebar.radio("功能", [
     "🔥 題材趨勢",
     "📈 歷史回測",
     "📋 訊號追蹤",
+    "⭐ 自訂追蹤",
 ])
 
 st.sidebar.markdown("---")
@@ -152,6 +153,26 @@ if page == "🏠 今日焦點":
 
     else:
         st.warning("還沒有掃描記錄。先到「📡 觀察清單掃描」跑一次，或等每天 15:30 自動排程。")
+
+    # 準確率快覽（如果有歷史記錄的話）
+    if has_scan and len(last_records) >= 2:
+        st.markdown("---")
+        st.markdown("### 🎯 系統準不準？")
+        older_date = last_records[1] if len(last_records) >= 2 else None
+        if older_date:
+            try:
+                review = tracker.review_accuracy(older_date, market.fetch_stock_price, 10)
+                if review and review["total"] > 0:
+                    acc = review["accuracy"]
+                    if acc >= 70:
+                        st.success(f"{older_date} 的掃描，10 天後驗證準確率 **{acc}%**（{review['correct']}/{review['total']}）")
+                    elif acc >= 50:
+                        st.warning(f"{older_date} 的掃描，10 天後驗證準確率 **{acc}%**（{review['correct']}/{review['total']}）")
+                    else:
+                        st.error(f"{older_date} 的掃描，10 天後驗證準確率 **{acc}%**（{review['correct']}/{review['total']}）")
+                    st.caption("→ 到「訊號追蹤」看逐筆驗證明細")
+            except Exception:
+                pass
 
     st.markdown("---")
     st.markdown("### 💡 今天該做什麼？")
@@ -959,3 +980,90 @@ elif page == "📋 訊號追蹤":
                         st.markdown("**結論：這段期間系統判斷偏差較大，可能需要調整參數。**")
                 else:
                     st.warning("無法驗證 — 可能日期太近（股價還沒走出來）或資料抓取失敗。至少要等 5 個交易日才能驗證。")
+
+
+# ===== 自訂追蹤 =====
+elif page == "⭐ 自訂追蹤":
+    st.title("⭐ 自訂追蹤")
+    st.caption("追蹤觀察清單以外的股票，你加的股票會出現在這裡")
+
+    import custom_watchlist
+
+    # 新增股票
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        new_id = st.text_input("股票代號", placeholder="例如 2603 或 GOOGL")
+    with col2:
+        new_note = st.text_input("備註（選填）", placeholder="為什麼追蹤這檔")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        add_btn = st.button("加入追蹤", type="primary")
+
+    if add_btn and new_id:
+        new_id = new_id.strip().upper()
+        if custom_watchlist.add(new_id, new_note):
+            st.success(f"已加入 {new_id}")
+            st.rerun()
+        else:
+            st.warning(f"{new_id} 已經在追蹤清單中")
+
+    st.markdown("---")
+
+    # 顯示追蹤清單 + 即時分析
+    items = custom_watchlist.load()
+
+    if not items:
+        st.info("還沒有自訂追蹤的股票。在上方輸入代號加入。")
+    else:
+        st.markdown(f"### 追蹤中（{len(items)} 檔）")
+
+        if st.button("分析全部", use_container_width=True):
+            for item in items:
+                sid = item["stock_id"]
+                note = item.get("note", "")
+                with st.spinner(f"分析 {sid}..."):
+                    try:
+                        nm = market.fetch_stock_name(sid)
+                        ind = market.fetch_stock_industry(sid)
+                        price_df = market.fetch_stock_price(sid)
+                        per_df = market.fetch_per_pbr(sid)
+                        inst_df = market.fetch_institutional(sid)
+                        rev_df = market.fetch_monthly_revenue(sid)
+
+                        tech = technical.analyze(price_df)
+                        if market.is_etf(sid):
+                            etf_info = market.fetch_etf_info(sid)
+                            fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+                        else:
+                            fund = fundamental.analyze(per_df, rev_df, ind)
+                        inst_result = institutional.analyze(inst_df)
+
+                        avg, _ = weighted_score(
+                            tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key,
+                            is_us=market.is_us(sid),
+                        )
+                        signal = overall_signal(avg)
+                        emoji = SIGNAL_EMOJI[signal]
+
+                        note_str = f"（{note}）" if note else ""
+                        if avg >= 7:
+                            st.success(f"{emoji} **{sid} {nm}** {note_str} — {avg}/10　技術 {tech['score']} 基本 {fund['score']} 籌碼 {inst_result['score']}")
+                        elif avg >= 4:
+                            st.warning(f"{emoji} **{sid} {nm}** {note_str} — {avg}/10　技術 {tech['score']} 基本 {fund['score']} 籌碼 {inst_result['score']}")
+                        else:
+                            st.error(f"{emoji} **{sid} {nm}** {note_str} — {avg}/10　技術 {tech['score']} 基本 {fund['score']} 籌碼 {inst_result['score']}")
+                    except Exception as e:
+                        st.error(f"**{sid}** 分析失敗：{e}")
+
+        # 列表 + 刪除
+        st.markdown("---")
+        for item in items:
+            col_a, col_b, col_c = st.columns([2, 3, 1])
+            with col_a:
+                st.markdown(f"**{item['stock_id']}**")
+            with col_b:
+                st.caption(item.get("note", ""))
+            with col_c:
+                if st.button("移除", key=f"rm_{item['stock_id']}"):
+                    custom_watchlist.remove(item["stock_id"])
+                    st.rerun()
