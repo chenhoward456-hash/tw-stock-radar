@@ -209,14 +209,38 @@ def format_message(results):
         lines.append("")
     # bull_mild 和 neutral 不特別提示，減少噪音
 
+    # 幫每檔算長線分數
+    try:
+        import valuation
+        for r in results:
+            try:
+                sid = r["stock_id"]
+                price_df = market.fetch_stock_price(sid)
+                per_df = market.fetch_per_pbr(sid)
+                rev_df = market.fetch_monthly_revenue(sid)
+                ind = market.fetch_stock_industry(sid)
+                if market.is_etf(sid):
+                    r["long_score"] = r.get("fund", 5)
+                else:
+                    long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+                    r["long_score"] = long_r["score"]
+            except Exception:
+                r["long_score"] = 0
+    except Exception:
+        pass
+
     greens = [r for r in results if r["avg"] >= 7]
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
     reds = [r for r in results if r["avg"] < 4]
 
     if greens:
-        lines.append(f"🟢 綠燈候選（{len(greens)} 檔）：")
+        lines.append(f"🟢 短線綠燈（{len(greens)} 檔）：")
         for r in greens:
-            lines.append(f"  {r['stock_id']} {r['name']} ({r['avg']}/10)")
+            ls = r.get("long_score", 0)
+            if ls <= 5:
+                lines.append(f"  ⚠ {r['stock_id']} {r['name']} 短{r['avg']}/長{ls} ← 長線弱，別追")
+            else:
+                lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{ls}")
         lines.append("")
     else:
         lines.append("💡 今天沒有綠燈股，耐心等待。")
@@ -228,6 +252,17 @@ def format_message(results):
             lines.append(f"  {r['stock_id']} {r['name']} ({r['avg']}/10)")
         if len(watchlist) > 5:
             lines.append(f"  ...還有 {len(watchlist) - 5} 檔")
+        lines.append("")
+
+    # 長線佈局機會
+    long_opps = [r for r in results if r.get("long_score", 0) >= 7 and r["avg"] < 7]
+    if long_opps:
+        long_opps.sort(key=lambda x: x.get("long_score", 0), reverse=True)
+        lines.append(f"📉 長線佈局機會（{len(long_opps)} 檔）：")
+        for r in long_opps[:5]:
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{r.get('long_score',0)}")
+        if len(long_opps) > 5:
+            lines.append(f"  ...還有 {len(long_opps) - 5} 檔")
         lines.append("")
 
     if reds:
