@@ -541,7 +541,7 @@ elif page == "📡 觀察清單掃描":
 
             if not long_opps.empty:
                 st.info(f"📉 長線佈局機會（{len(long_opps)} 檔）— 短線弱但基本面好，逢低佈局")
-                st.dataframe(long_opps[["代號", "名稱", "板塊", "短線", "長線", "訊號"]], use_container_width=True, hide_index=True, height=400)
+                st.dataframe(long_opps, use_container_width=True, hide_index=True, height=400)
 
             if not watch.empty:
                 st.warning(f"🟡 短線值得關注（{len(watch)} 檔）")
