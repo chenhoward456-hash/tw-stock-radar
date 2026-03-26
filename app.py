@@ -29,13 +29,8 @@ from watchlist import WATCHLIST
 
 st.set_page_config(page_title="投資雷達", page_icon="📊", layout="centered")
 
-st.markdown("""
-<style>
-    .stButton > button { min-height: 48px; font-size: 16px; }
-    [data-testid="stMetricValue"] { font-size: 1.5rem; }
-    [data-testid="stDataFrame"] { overflow-x: auto; }
-</style>
-""", unsafe_allow_html=True)
+import ios_theme
+ios_theme.apply()
 
 SIGNAL_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
