@@ -515,10 +515,15 @@ elif page == "💼 持倉監控":
                 new_shares = st.number_input("股數", min_value=0, step=100, value=1000)
                 new_date = st.date_input("買入日期")
 
-            new_stop = st.number_input("停損價（選填，0=不設）", min_value=0.0, step=1.0, format="%.1f")
+            # 自動建議停損價
+            suggested_stop = round(new_price * 0.92, 1) if new_price > 0 else 0.0
+            st.caption(f"建議停損：{suggested_stop}（買入價 -8%）")
+            new_stop = st.number_input("停損價", min_value=0.0, step=1.0, format="%.1f", value=suggested_stop)
             submitted = st.form_submit_button("新增", use_container_width=True)
 
             if submitted and new_id and new_price > 0 and new_shares > 0:
+                if new_stop == 0:
+                    new_stop = suggested_stop
                 HOLDINGS.append({
                     "stock_id": new_id.strip(),
                     "buy_price": new_price,
@@ -527,7 +532,7 @@ elif page == "💼 持倉監控":
                     "stop_loss": new_stop,
                 })
                 _save_holdings(HOLDINGS)
-                st.success(f"已新增 {new_id}！重新整理頁面即可看到。")
+                st.success(f"已新增 {new_id}！停損設在 {new_stop}（-{(1 - new_stop/new_price)*100:.0f}%）")
                 st.rerun()
 
     # 顯示現有持倉 + 刪除按鈕
