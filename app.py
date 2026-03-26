@@ -22,6 +22,8 @@ import institutional
 import news
 import portfolio
 import tracker
+import streak
+import sector_rotation
 from scoring import STRATEGIES, weighted_score
 from watchlist import WATCHLIST
 
@@ -206,12 +208,55 @@ if page == "🏠 今日焦點":
             except Exception:
                 pass
 
+    # ===== 連續訊號 =====
+    try:
+        streaks = streak.detect_streaks(min_streak=2)
+        if streaks:
+            st.markdown("---")
+            st.markdown("### 🔥 連續訊號")
+            greens = {k: v for k, v in streaks.items() if v["type"] == "green"}
+            reds = {k: v for k, v in streaks.items() if v["type"] == "red"}
+
+            if greens:
+                for sid, info in sorted(greens.items(), key=lambda x: x[1]["streak"], reverse=True):
+                    st.success(f"🟢 **{sid} {info['name']}** 連續 {info['streak']} 天綠燈（平均 {info['avg_score']}/10）")
+                st.caption("連續 3 天以上綠燈 → 短線進場訊號")
+
+            if reds:
+                for sid, info in sorted(reds.items(), key=lambda x: x[1]["streak"], reverse=True):
+                    st.error(f"🔴 **{sid} {info['name']}** 連續 {info['streak']} 天紅燈（平均 {info['avg_score']}/10）")
+    except Exception:
+        pass
+
+    # ===== 產業輪動 =====
+    try:
+        rotation = sector_rotation.detect_rotation()
+        if rotation:
+            st.markdown("---")
+            st.markdown("### 🔄 產業輪動")
+            hot = [r for r in rotation if r["change"] > 0][:3]
+            cold = [r for r in rotation if r["change"] < 0][:3]
+
+            if hot:
+                for r in hot:
+                    st.success(f"📈 **{r['sector']}** {r['label']}（{r['previous_avg']} → {r['current_avg']}，{r['change']:+.1f}）")
+            if cold:
+                for r in cold:
+                    st.error(f"📉 **{r['sector']}** {r['label']}（{r['previous_avg']} → {r['current_avg']}，{r['change']:+.1f}）")
+
+            if not hot and not cold:
+                st.info("目前各產業分數變化不大，沒有明顯輪動。")
+    except Exception:
+        pass
+
     st.markdown("---")
     st.markdown("### 💡 今天該做什麼？")
     st.markdown("""
 1. 看上面有沒有 🟢 綠燈股 → 有的話點「個股分析」深入看
-2. 持倉有 🚨 警告 → 認真評估要不要處理
-3. 都沒事 → 關掉，明天再來看
+2. 🔥 連續訊號 → 連續 3 天綠燈 = 短線進場訊號
+3. 🔄 產業輪動 → 升溫的產業裡找機會
+4. 持倉有 🚨 警告 → 認真評估要不要處理
+5. 都沒事 → 關掉，明天再來看
     """)
 
 
