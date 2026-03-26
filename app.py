@@ -201,12 +201,21 @@ if page == "🏠 今日焦點":
             st.markdown(f"### 📡 最近掃描（{scan_date}）")
 
             if greens:
-                st.markdown("**🟢 系統推薦關注這幾檔：**")
+                st.markdown("**🟢 短線綠燈：**")
                 for r in sorted(greens, key=lambda x: x["avg"], reverse=True):
-                    st.markdown(f"- **{r['stock_id']} {r['name']}**（{r['avg']}/10）— {r.get('sector', '')}")
+                    st.markdown(f"- **{r['stock_id']} {r['name']}**（短線 {r['avg']}/10）— {r.get('sector', '')}")
                 st.caption("→ 點左邊「個股分析」輸入代號看完整報告")
             else:
-                st.info("目前沒有 7 分以上的綠燈股，建議耐心等待。")
+                st.info("目前沒有短線 7 分以上的綠燈股，建議耐心等待。")
+
+            # 長線佈局機會（從掃描資料中找短線低但基本面可能好的）
+            # 這裡只有短線分數，用 tech < 4 但 fund >= 6 來近似
+            long_candidates = [r for r in results if r.get("avg", 0) < 5 and r.get("fund", 0) >= 7]
+            if long_candidates:
+                with st.expander(f"📉 可能的長線佈局機會（{len(long_candidates)} 檔）— 短線弱但基本面好"):
+                    for r in sorted(long_candidates, key=lambda x: x.get("fund", 0), reverse=True):
+                        st.markdown(f"- {r['stock_id']} {r['name']}（短線 {r['avg']}/10，基本面 {r.get('fund', '?')}/10）")
+                    st.caption("到「個股分析」切換「長線佈局」策略看完整評估")
 
             if watch:
                 with st.expander(f"🟡 值得留意（{len(watch)} 檔）"):
@@ -214,7 +223,7 @@ if page == "🏠 今日焦點":
                         st.markdown(f"- {r['stock_id']} {r['name']}（{r['avg']}/10）")
 
             if reds:
-                with st.expander(f"🔴 偏空（{len(reds)} 檔）— 不要碰"):
+                with st.expander(f"🔴 偏空（{len(reds)} 檔）— 短線不要碰"):
                     for r in sorted(reds, key=lambda x: x["avg"]):
                         st.markdown(f"- {r['stock_id']} {r['name']}（{r['avg']}/10）")
 
@@ -470,6 +479,13 @@ elif page == "📡 觀察清單掃描":
             )
             signal = overall_signal(avg)
 
+            # 長線分數
+            if etf:
+                long_score = fund["score"]  # ETF 已經是專用評估
+            else:
+                long_result = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+                long_score = long_result["score"]
+
             return {
                 "代號": stock_id,
                 "名稱": sname,
@@ -477,7 +493,8 @@ elif page == "📡 觀察清單掃描":
                 "技術": tech["score"],
                 "基本": fund["score"],
                 "籌碼": inst_result["score"],
-                "綜合": avg,
+                "短線": avg,
+                "長線": long_score,
                 "訊號": SIGNAL_EMOJI[signal],
             }
 
@@ -495,17 +512,26 @@ elif page == "📡 觀察清單掃描":
         progress.empty()
 
         if results:
-            df = pd.DataFrame(results).sort_values("綜合", ascending=False)
+            df = pd.DataFrame(results).sort_values("短線", ascending=False)
 
-            greens = df[df["綜合"] >= 7]
-            watch = df[(df["綜合"] >= 6) & (df["綜合"] < 7)]
-            reds = df[df["綜合"] < 4]
+            # 短線綠燈
+            greens = df[df["短線"] >= 7]
+            watch = df[(df["短線"] >= 6) & (df["短線"] < 7)]
+            reds = df[df["短線"] < 4]
+
+            # 長線佈局機會（短線低但長線高 = 逢低佈局）
+            long_opps = df[(df["長線"] >= 7) & (df["短線"] < 7)].sort_values("長線", ascending=False)
 
             if not greens.empty:
-                st.success(f"🟢 綠燈候選（{len(greens)} 檔）")
+                st.success(f"🟢 短線綠燈（{len(greens)} 檔）— 各面向都好")
                 st.dataframe(greens, use_container_width=True, hide_index=True)
+
+            if not long_opps.empty:
+                st.info(f"📉 長線佈局機會（{len(long_opps)} 檔）— 短線弱但基本面好，逢低佈局")
+                st.dataframe(long_opps[["代號", "名稱", "板塊", "短線", "長線", "訊號"]], use_container_width=True, hide_index=True)
+
             if not watch.empty:
-                st.warning(f"🟡 值得關注（{len(watch)} 檔）")
+                st.warning(f"🟡 短線值得關注（{len(watch)} 檔）")
                 st.dataframe(watch, use_container_width=True, hide_index=True)
             if not reds.empty:
                 st.error(f"🔴 偏空警示（{len(reds)} 檔）")
@@ -515,7 +541,7 @@ elif page == "📡 觀察清單掃描":
             st.dataframe(df, use_container_width=True, hide_index=True)
 
             st.markdown("### 板塊強弱")
-            sector_df = df.groupby("板塊")["綜合"].mean().round(1).sort_values(ascending=False)
+            sector_df = df.groupby("板塊")["短線"].mean().round(1).sort_values(ascending=False)
             st.bar_chart(sector_df)
 
             # 儲存訊號
@@ -523,7 +549,7 @@ elif page == "📡 觀察清單掃描":
                 scan_results = [
                     {"stock_id": r["代號"], "name": r["名稱"], "sector": r["板塊"],
                      "tech": r["技術"], "fund": r["基本"], "inst": r["籌碼"],
-                     "avg": r["綜合"], "overall": overall_signal(r["綜合"])}
+                     "avg": r["短線"], "overall": overall_signal(r["短線"])}
                     for r in results
                 ]
                 filepath = tracker.save_scan(scan_results)
