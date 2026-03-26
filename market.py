@@ -34,7 +34,13 @@ def is_etf(symbol):
 def fetch_stock_name(symbol):
     if is_us(symbol):
         return us.fetch_stock_name(symbol)
-    return tw.fetch_stock_name(symbol, TOKEN)
+    name = tw.fetch_stock_name(symbol, TOKEN)
+    if name == str(symbol):
+        # FinMind 沒拿到 → 試 yfinance
+        yf_name = us.fetch_stock_name(f"{symbol}.TW")
+        if yf_name != f"{symbol}.TW":
+            return yf_name
+    return name
 
 
 def fetch_stock_names(symbols):
@@ -54,31 +60,47 @@ def fetch_stock_names(symbols):
 def fetch_stock_industry(symbol):
     if is_us(symbol):
         return us.fetch_stock_industry(symbol)
-    return tw.fetch_stock_industry(symbol, TOKEN)
+    result = tw.fetch_stock_industry(symbol, TOKEN)
+    if not result:
+        result = us.fetch_stock_industry(f"{symbol}.TW")
+    return result
 
 
 def fetch_stock_price(symbol, days=150):
     if is_us(symbol):
         return us.fetch_stock_price(symbol, days)
-    return tw.fetch_stock_price(symbol, days, TOKEN)
+    df = tw.fetch_stock_price(symbol, days, TOKEN)
+    if df.empty:
+        # FinMind 失敗 → fallback 到 yfinance（加 .TW）
+        df = us.fetch_stock_price(f"{symbol}.TW", days)
+    return df
 
 
 def fetch_per_pbr(symbol):
     if is_us(symbol):
         return us.fetch_per_pbr(symbol)
-    return tw.fetch_per_pbr(symbol, token=TOKEN)
+    df = tw.fetch_per_pbr(symbol, token=TOKEN)
+    if df.empty:
+        df = us.fetch_per_pbr(f"{symbol}.TW")
+    return df
 
 
 def fetch_monthly_revenue(symbol):
     if is_us(symbol):
         return us.fetch_monthly_revenue(symbol)
-    return tw.fetch_monthly_revenue(symbol, token=TOKEN)
+    df = tw.fetch_monthly_revenue(symbol, token=TOKEN)
+    if df.empty:
+        df = us.fetch_monthly_revenue(f"{symbol}.TW")
+    return df
 
 
 def fetch_institutional(symbol):
     if is_us(symbol):
         return us.fetch_institutional(symbol)
-    return tw.fetch_institutional(symbol, token=TOKEN)
+    df = tw.fetch_institutional(symbol, token=TOKEN)
+    if df.empty:
+        df = us.fetch_institutional(f"{symbol}.TW")
+    return df
 
 
 def fetch_stock_price_adjusted(symbol, days=500):
