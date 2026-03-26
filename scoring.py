@@ -25,6 +25,12 @@ STRATEGIES = {
         "description": "最重基本面，適合長期存股",
         "weights": {"tech": 0.10, "fund": 0.50, "inst": 0.15, "news": 0.25},
     },
+    "longterm": {
+        "label": "長線佈局",
+        "description": "不看短期漲跌，只看營收成長和估值便宜度",
+        "weights": {"tech": 0.0, "fund": 0.60, "inst": 0.10, "news": 0.30},
+        "use_valuation": True,
+    },
 }
 
 

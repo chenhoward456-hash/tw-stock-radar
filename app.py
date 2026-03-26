@@ -17,6 +17,7 @@ from config import TOTAL_BUDGET
 import market
 import technical
 import fundamental
+import valuation
 import institutional
 import news
 import portfolio
@@ -219,6 +220,9 @@ elif page == "🔍 個股分析":
             tech = technical.analyze(price_df)
             if etf:
                 fund = fundamental.analyze_etf(price_df, etf_info, per_df)
+            elif strategy_key == "longterm":
+                # 長線佈局：用專用評估，不看短期漲跌
+                fund = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
             else:
                 fund = fundamental.analyze(per_df, rev_df, ind)
             inst = institutional.analyze(inst_df)
