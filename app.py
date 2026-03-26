@@ -118,18 +118,48 @@ if page == "🏠 今日焦點":
         _holdings = []
 
     if _holdings:
-        st.markdown("### 🚨 持倉狀況")
+        st.markdown("### 持倉狀況")
         from monitor import check_holding
+
+        # 每檔持倉根據類型顯示不同評分
         for h in _holdings:
             try:
                 r = check_holding(h)
+                sid = r["stock_id"]
                 pnl = f"{r['pnl_pct']:+.1f}%"
-                if r["warnings"]:
-                    st.error(f"**{r['stock_id']} {r['name']}**　損益 {pnl}　評分 {r['avg']}/10")
-                    for w in r["warnings"][:2]:
-                        st.caption(f"　　{w}")
+
+                # 判斷這檔該用什麼評分
+                if sid == "0050" or market.is_etf(sid):
+                    # ETF/0050：只顯示多空狀態，不顯示分數
+                    _p = market.fetch_stock_price(sid, days=150)
+                    _t = technical.analyze(_p) if not _p.empty else {"details": [], "score": 5}
+                    _tu = any("趨勢向上" in d for d in _t["details"])
+                    _td = any("趨勢向下" in d or "趨勢剛轉空" in d for d in _t["details"])
+                    if _td:
+                        st.warning(f"**{sid} {r['name']}**　損益 {pnl}　⚠ 趨勢偏空，留意")
+                    elif _tu:
+                        st.success(f"**{sid} {r['name']}**　損益 {pnl}　✅ 趨勢向上，安心持有")
+                    else:
+                        st.info(f"**{sid} {r['name']}**　損益 {pnl}　📊 盤整中")
                 else:
-                    st.success(f"**{r['stock_id']} {r['name']}**　損益 {pnl}　評分 {r['avg']}/10 — 正常")
+                    # 個股：用長線佈局評分
+                    _p = market.fetch_stock_price(sid)
+                    _per = market.fetch_per_pbr(sid)
+                    _rev = market.fetch_monthly_revenue(sid)
+                    _ind = market.fetch_stock_industry(sid)
+                    _long = valuation.analyze_longterm(_per, _rev, _p, _ind)
+                    long_score = _long["score"]
+
+                    if r["warnings"]:
+                        st.error(f"**{sid} {r['name']}**　損益 {pnl}　長線 {long_score}/10")
+                        for w in r["warnings"][:2]:
+                            st.caption(f"　　{w}")
+                    elif long_score >= 7:
+                        st.success(f"**{sid} {r['name']}**　損益 {pnl}　長線 {long_score}/10 — 基本面良好")
+                    elif long_score >= 4:
+                        st.info(f"**{sid} {r['name']}**　損益 {pnl}　長線 {long_score}/10 — 觀望中")
+                    else:
+                        st.warning(f"**{sid} {r['name']}**　損益 {pnl}　長線 {long_score}/10 — 基本面轉弱")
             except Exception:
                 pass
 
