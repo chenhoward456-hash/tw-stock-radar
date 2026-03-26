@@ -82,6 +82,30 @@ if page == "🏠 今日焦點":
     st.title("🏠 今日焦點")
     st.caption("打開就知道今天該關注什麼 — 不用看 145 檔，系統幫你篩好了")
 
+    # ===== 0050 多空燈號（最重要，放最上面）=====
+    try:
+        _0050_price = market.fetch_stock_price("0050", days=150)
+        if not _0050_price.empty:
+            _0050_tech = technical.analyze(_0050_price)
+            _0050_score = _0050_tech["score"]
+            _0050_details = _0050_tech["details"]
+            _trend_up = any("趨勢向上" in d or "趨勢剛轉多" in d for d in _0050_details)
+            _trend_down = any("趨勢向下" in d or "趨勢剛轉空" in d for d in _0050_details)
+            _below_ma = any("跌破" in d and "均線" in d for d in _0050_details)
+
+            if _trend_down and _below_ma and _0050_score <= 3:
+                st.error(f"🚨 **0050 空頭警報** — 技術分 {_0050_score}/10，趨勢轉空。建議暫停定期定額、考慮減碼。")
+            elif _trend_down and _0050_score <= 4:
+                st.warning(f"⚠ **0050 多空轉換注意** — 技術分 {_0050_score}/10，趨勢偏空。留意後續。")
+            elif _trend_up and _0050_score >= 7:
+                st.success(f"✅ **0050 多頭確認** — 技術分 {_0050_score}/10，安心定期定額。")
+            else:
+                st.info(f"📊 **0050** — 技術分 {_0050_score}/10，盤整中。正常定期定額。")
+    except Exception:
+        pass
+
+    st.markdown("---")
+
     # 讀最近的掃描記錄
     last_records = tracker.list_records()
     has_scan = bool(last_records)

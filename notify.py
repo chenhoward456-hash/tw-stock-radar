@@ -145,12 +145,69 @@ def run_scan():
     return results
 
 
+def check_0050_regime():
+    """
+    0050 多空轉換偵測
+    多頭：20MA > 60MA + 股價在均線上
+    空頭：20MA < 60MA + 股價在均線下
+    回傳：("bull"/"bear"/"neutral", 說明文字)
+    """
+    try:
+        import market
+        import technical
+        price_df = market.fetch_stock_price("0050", days=150)
+        if price_df.empty:
+            return "neutral", ""
+
+        tech = technical.analyze(price_df)
+        score = tech["score"]
+        details = tech["details"]
+
+        # 找趨勢方向
+        trend_up = any("趨勢向上" in d or "趨勢剛轉多" in d for d in details)
+        trend_down = any("趨勢向下" in d or "趨勢剛轉空" in d for d in details)
+        below_ma = any("跌破" in d and "均線" in d for d in details)
+        above_ma = any("站上所有均線" in d for d in details)
+
+        if trend_down and below_ma and score <= 3:
+            return "bear", f"0050 技術分 {score}/10，趨勢轉空 + 跌破均線"
+        elif trend_down and score <= 4:
+            return "warning", f"0050 技術分 {score}/10，趨勢偏空，注意風險"
+        elif trend_up and above_ma and score >= 7:
+            return "bull", f"0050 技術分 {score}/10，多頭排列，安心持有"
+        elif trend_up:
+            return "bull_mild", f"0050 技術分 {score}/10，趨勢向上"
+        else:
+            return "neutral", f"0050 技術分 {score}/10，盤整中"
+    except Exception:
+        return "neutral", ""
+
+
 def format_message(results):
     """格式化通知訊息"""
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     lines = [f"投資雷達掃描 ({now})", ""]
+
+    # ===== 0050 多空燈號（最重要，放最上面）=====
+    regime, regime_msg = check_0050_regime()
+    if regime == "bear":
+        lines.append("🚨🚨🚨 0050 空頭警報 🚨🚨🚨")
+        lines.append(regime_msg)
+        lines.append("→ 建議暫停定期定額，考慮減碼")
+        lines.append("")
+    elif regime == "warning":
+        lines.append("⚠ 0050 多空轉換注意")
+        lines.append(regime_msg)
+        lines.append("→ 留意後續發展，準備應變")
+        lines.append("")
+    elif regime == "bull":
+        lines.append("✅ 0050 多頭確認")
+        lines.append(regime_msg)
+        lines.append("→ 安心定期定額，不用動")
+        lines.append("")
+    # bull_mild 和 neutral 不特別提示，減少噪音
 
     greens = [r for r in results if r["avg"] >= 7]
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
