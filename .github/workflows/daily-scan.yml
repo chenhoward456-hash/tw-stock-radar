@@ -2,9 +2,7 @@ name: 每日臺股掃描
 
 on:
   schedule:
-    # 台灣時間 15:30（收盤後）= UTC 07:30
     - cron: '30 7 * * 1-5'
-  # 也可以手動觸發
   workflow_dispatch:
 
 jobs:
@@ -21,20 +19,13 @@ jobs:
       - name: 安裝依賴
         run: pip install requests pandas numpy anthropic yfinance
 
-      - name: 建立 config.py
-        run: |
-          cat > config.py << 'PYEOF'
-          FINMIND_TOKEN = "${{ secrets.FINMIND_TOKEN }}"
-          TOTAL_BUDGET = 0
-          LINE_CHANNEL_ACCESS_TOKEN = "${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}"
-          LINE_USER_ID = "${{ secrets.LINE_USER_ID }}"
-          TELEGRAM_BOT_TOKEN = ""
-          TELEGRAM_CHAT_ID = ""
-          ANTHROPIC_API_KEY = "${{ secrets.ANTHROPIC_API_KEY }}"
-          LINE_CHANNEL_SECRET = "${{ secrets.LINE_CHANNEL_SECRET }}"
-          PYEOF
-
       - name: 執行掃描並推送 LINE
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
         run: python notify.py
 
       - name: 把掃描結果 commit 回 repo

@@ -5,6 +5,7 @@
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
+import cache
 
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
 
@@ -107,54 +108,46 @@ def fetch_stock_names(stock_ids, token=None):
 
 
 def fetch_stock_price(stock_id, days=150, token=None):
-    """抓取日K線（股價/成交量）"""
+    """抓取日K線（股價/成交量）— 帶快取"""
     end = datetime.now()
     start = end - timedelta(days=days)
-    return _fetch(
-        "TaiwanStockPrice",
-        stock_id,
-        start.strftime("%Y-%m-%d"),
-        end.strftime("%Y-%m-%d"),
-        token,
+    return cache.cached_call(
+        "tw_price", (stock_id, days), cache.TTL_REALTIME,
+        lambda: _fetch("TaiwanStockPrice", stock_id,
+                        start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), token),
     )
 
 
 def fetch_institutional(stock_id, days=30, token=None):
-    """抓取三大法人買賣超"""
+    """抓取三大法人買賣超 — 帶快取"""
     end = datetime.now()
     start = end - timedelta(days=days)
-    return _fetch(
-        "TaiwanStockInstitutionalInvestorsBuySell",
-        stock_id,
-        start.strftime("%Y-%m-%d"),
-        end.strftime("%Y-%m-%d"),
-        token,
+    return cache.cached_call(
+        "tw_inst", (stock_id, days), cache.TTL_REALTIME,
+        lambda: _fetch("TaiwanStockInstitutionalInvestorsBuySell", stock_id,
+                        start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), token),
     )
 
 
 def fetch_per_pbr(stock_id, days=365, token=None):
-    """抓取本益比 / 本淨比 / 殖利率"""
+    """抓取本益比 / 本淨比 / 殖利率 — 帶快取"""
     end = datetime.now()
     start = end - timedelta(days=days)
-    return _fetch(
-        "TaiwanStockPER",
-        stock_id,
-        start.strftime("%Y-%m-%d"),
-        end.strftime("%Y-%m-%d"),
-        token,
+    return cache.cached_call(
+        "tw_per", (stock_id, days), cache.TTL_DAILY,
+        lambda: _fetch("TaiwanStockPER", stock_id,
+                        start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), token),
     )
 
 
 def fetch_monthly_revenue(stock_id, months=15, token=None):
-    """抓取月營收"""
+    """抓取月營收 — 帶快取"""
     end = datetime.now()
     start = end - timedelta(days=months * 35)
-    return _fetch(
-        "TaiwanStockMonthRevenue",
-        stock_id,
-        start.strftime("%Y-%m-%d"),
-        end.strftime("%Y-%m-%d"),
-        token,
+    return cache.cached_call(
+        "tw_revenue", (stock_id, months), cache.TTL_DAILY,
+        lambda: _fetch("TaiwanStockMonthRevenue", stock_id,
+                        start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), token),
     )
 
 

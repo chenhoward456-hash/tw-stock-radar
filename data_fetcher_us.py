@@ -5,6 +5,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import cache
 
 
 _ticker_cache = {}
@@ -17,23 +18,27 @@ def _get_ticker(symbol):
 
 
 def fetch_stock_name(symbol):
-    """查詢股票名稱"""
-    try:
-        t = _get_ticker(symbol)
-        info = t.info
-        return info.get("shortName", info.get("longName", symbol))
-    except Exception:
-        return symbol
+    """查詢股票名稱 — 帶快取"""
+    def _do():
+        try:
+            t = _get_ticker(symbol)
+            info = t.info
+            return info.get("shortName", info.get("longName", symbol))
+        except Exception:
+            return symbol
+    return cache.cached_call("us_name", (symbol,), cache.TTL_STATIC, _do)
 
 
 def fetch_stock_industry(symbol):
-    """查詢產業類別"""
-    try:
-        t = _get_ticker(symbol)
-        info = t.info
-        return info.get("sector", "")
-    except Exception:
-        return ""
+    """查詢產業類別 — 帶快取"""
+    def _do():
+        try:
+            t = _get_ticker(symbol)
+            info = t.info
+            return info.get("sector", "")
+        except Exception:
+            return ""
+    return cache.cached_call("us_industry", (symbol,), cache.TTL_STATIC, _do)
 
 
 def fetch_stock_price(symbol, days=150):
