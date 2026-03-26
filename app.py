@@ -86,7 +86,6 @@ if page == "🏠 今日焦點":
     has_scan = bool(last_records)
 
     # 持倉狀況
-    import holdings as _h
     HOLDINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
     try:
         _vars = {}
