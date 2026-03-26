@@ -7,9 +7,13 @@ import numpy as np
 from datetime import datetime, timedelta
 
 
+_ticker_cache = {}
+
 def _get_ticker(symbol):
     import yfinance as yf
-    return yf.Ticker(symbol)
+    if symbol not in _ticker_cache:
+        _ticker_cache[symbol] = yf.Ticker(symbol)
+    return _ticker_cache[symbol]
 
 
 def fetch_stock_name(symbol):

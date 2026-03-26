@@ -35,6 +35,27 @@ def _kd(high, low, close, k_period=9, d_period=3):
     return k, d
 
 
+def _detect_regime(close, lookback=60):
+    """偵測動能 vs 均值回歸模式（用日報酬自相關 + Hurst 指數近似）"""
+    returns = close.pct_change().dropna().tail(lookback)
+    if len(returns) < 20:
+        return "neutral", 0.0
+
+    autocorr = returns.autocorr(lag=1)
+    n = len(returns)
+    mean_r = returns.mean()
+    deviate = (returns - mean_r).cumsum()
+    R = deviate.max() - deviate.min()
+    S = returns.std()
+    hurst = np.log(R / S) / np.log(n) if S > 0 and R > 0 else 0.5
+
+    if hurst > 0.55 and autocorr > 0.05:
+        return "momentum", round(min(1.0, (hurst - 0.5) * 4), 2)
+    elif hurst < 0.45 and autocorr < -0.05:
+        return "mean_reversion", round(min(1.0, (0.5 - hurst) * 4), 2)
+    return "neutral", 0.0
+
+
 def _bollinger(prices, period=20, std_mult=2):
     middle = prices.rolling(period).mean()
     std = prices.rolling(period).std()
@@ -94,26 +115,48 @@ def analyze(price_df):
             details.append(f"✗ 20日均線下降中（{ma20_slope:+.1f}%）")
             score -= 1
 
-    # ===== RSI =====
+    # ===== 市場狀態偵測 =====
+    regime, regime_str = _detect_regime(close)
+    regime_labels = {"momentum": "動能趨勢", "mean_reversion": "震盪回歸", "neutral": "中性"}
+    details.append(f"— 市場狀態：{regime_labels[regime]}（強度 {regime_str}）")
+
+    # ===== RSI（根據市場狀態調整解讀）=====
     rsi_series = _rsi(close)
     current_rsi = rsi_series.iloc[-1]
 
     if np.isnan(current_rsi):
         details.append("— RSI 資料不足")
-    elif current_rsi > 80:
-        details.append(f"⚠ RSI = {current_rsi:.0f}（嚴重超買）")
-        score -= 2
-    elif current_rsi > 70:
-        details.append(f"⚠ RSI = {current_rsi:.0f}（接近超買）")
-        score -= 1
-    elif current_rsi < 20:
-        details.append(f"✓ RSI = {current_rsi:.0f}（嚴重超賣，反彈機會）")
-        score += 2
-    elif current_rsi < 30:
-        details.append(f"✓ RSI = {current_rsi:.0f}（接近超賣）")
-        score += 1
+    elif regime == "momentum":
+        # 動能模式：超賣不是買點（還會繼續跌），超買是強勢
+        if current_rsi > 80:
+            details.append(f"— RSI = {current_rsi:.0f}（動能強勁，暫不視為超買）")
+            score -= 0.5
+        elif current_rsi > 70:
+            details.append(f"— RSI = {current_rsi:.0f}（動能延續中）")
+        elif current_rsi < 20:
+            details.append(f"⚠ RSI = {current_rsi:.0f}（超賣但處於下跌動能，不急著撿）")
+            score -= 1
+        elif current_rsi < 30:
+            details.append(f"⚠ RSI = {current_rsi:.0f}（超賣 + 下跌動能，小心接刀）")
+            score -= 0.5
+        else:
+            details.append(f"— RSI = {current_rsi:.0f}（正常範圍）")
     else:
-        details.append(f"— RSI = {current_rsi:.0f}（正常範圍）")
+        # 震盪/中性模式：傳統 RSI 解讀
+        if current_rsi > 80:
+            details.append(f"⚠ RSI = {current_rsi:.0f}（嚴重超買）")
+            score -= 2
+        elif current_rsi > 70:
+            details.append(f"⚠ RSI = {current_rsi:.0f}（接近超買）")
+            score -= 1
+        elif current_rsi < 20:
+            details.append(f"✓ RSI = {current_rsi:.0f}（嚴重超賣，反彈機會）")
+            score += 2
+        elif current_rsi < 30:
+            details.append(f"✓ RSI = {current_rsi:.0f}（接近超賣）")
+            score += 1
+        else:
+            details.append(f"— RSI = {current_rsi:.0f}（正常範圍）")
 
     # ===== MACD =====
     macd_line, signal_line, histogram = _macd(close)

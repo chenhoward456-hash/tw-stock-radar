@@ -52,4 +52,11 @@ def weighted_score(tech_score, fund_score, inst_score, news_score, strategy="bal
         + news_score * w["news"]
     )
 
+    # 安全閘門：任何面向低於 3 分 → 總分封頂 6 分（防止假陽性）
+    worst = min(tech_score, fund_score, inst_score)
+    if worst <= 2:
+        score = min(score, 5.0)
+    elif worst <= 3:
+        score = min(score, 6.0)
+
     return round(score, 1), config

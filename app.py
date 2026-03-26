@@ -24,7 +24,15 @@ import tracker
 from scoring import STRATEGIES, weighted_score
 from watchlist import WATCHLIST
 
-st.set_page_config(page_title="投資雷達", page_icon="📊", layout="wide")
+st.set_page_config(page_title="投資雷達", page_icon="📊", layout="centered")
+
+st.markdown("""
+<style>
+    .stButton > button { min-height: 48px; font-size: 16px; }
+    [data-testid="stMetricValue"] { font-size: 1.5rem; }
+    [data-testid="stDataFrame"] { overflow-x: auto; }
+</style>
+""", unsafe_allow_html=True)
 
 SIGNAL_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
@@ -226,26 +234,33 @@ elif page == "🔍 個股分析":
         if ind:
             st.caption(f"產業：{ind} ｜ 策略：{strategy_info['label']}")
 
-        # 評分區
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.metric("綜合評分（加權）", f"{avg} / 10")
-            st.markdown(f"### {SIGNAL_EMOJI[signal]} {avg}/10")
-        with c2:
-            if avg >= 7:
-                st.success("各面向條件良好，可以考慮佈局。")
-            elif avg >= 5.5:
-                st.warning("條件尚可，建議分批進場。")
-            elif avg >= 4:
-                st.warning("條件普通，建議觀望。")
-            else:
-                st.error("偏空，不建議進場。")
+        # 評分區 — 一目了然的結論
+        st.markdown(f"## {SIGNAL_EMOJI[signal]} {avg}/10")
 
-            w = strategy_info["weights"]
-            st.caption(
-                f"權重：技術{w['tech']:.0%} 基本{w['fund']:.0%} "
-                f"籌碼{w['inst']:.0%} 消息{w['news']:.0%}"
-            )
+        if avg >= 7:
+            st.success("各面向條件良好，可以考慮開始建倉（先買一部分就好）。")
+        elif avg >= 5.5:
+            st.warning("條件還行但不算突出。已持有可以繼續抱，還沒買建議等分數更高再進。")
+        elif avg >= 4:
+            st.info("目前條件普通偏弱。建議放觀察清單就好，不急著進場。")
+        else:
+            st.error("目前條件偏差。持有中考慮減碼，還沒買不建議現在進場。")
+
+        w = strategy_info["weights"]
+        st.caption(
+            f"策略：{strategy_info['label']} ｜ "
+            f"權重：技術{w['tech']:.0%} 基本{w['fund']:.0%} "
+            f"籌碼{w['inst']:.0%} 消息{w['news']:.0%}"
+        )
+
+        with st.expander("這些分數怎麼看？"):
+            st.markdown("""
+- **技術面**：股價走勢和成交量，判斷現在是漲勢還是跌勢
+- **基本面**：公司賺不賺錢、股價貴不貴（本益比、營收）
+- **籌碼面**：法人（外資、投信）最近在買還是賣
+- **消息面**：近期新聞是正面還是負面
+- **7 分以上** = 條件好，可以考慮 ｜ **4 分以下** = 條件差，先不碰
+            """)
 
         # K 線圖
         if not price_df.empty:

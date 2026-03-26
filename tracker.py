@@ -24,6 +24,7 @@ def save_scan(results):
             "tech": r.get("tech", 0),
             "fund": r.get("fund", 0),
             "inst": r.get("inst", 0),
+            "news": r.get("news", 5),
             "avg": r.get("avg", 0),
             "overall": r.get("overall", ""),
         })
