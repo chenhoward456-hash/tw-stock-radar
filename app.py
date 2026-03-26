@@ -120,7 +120,14 @@ if page == "🏠 今日焦點":
     if not _holdings:
         try:
             import json as _json
-            _holdings = _json.loads(st.secrets.get("HOLDINGS_JSON", "[]"))
+            # 支援兩種格式：HOLDINGS_JSON 或 HOLDINGS.json
+            raw = ""
+            if "HOLDINGS_JSON" in st.secrets:
+                raw = st.secrets["HOLDINGS_JSON"]
+            elif "HOLDINGS" in st.secrets and "json" in st.secrets["HOLDINGS"]:
+                raw = st.secrets["HOLDINGS"]["json"]
+            if raw:
+                _holdings = _json.loads(raw)
         except Exception:
             _holdings = []
 
