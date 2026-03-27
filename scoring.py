@@ -103,6 +103,80 @@ def _calc_confidence(tech_score, fund_score, inst_score, news_score, is_us=False
         return "low", "、".join(detail_parts) if detail_parts else "資料不足"
 
 
+def calc_consensus_score(tech_score, fund_score, inst_score, news_score,
+                         threshold_bull=6.0, threshold_bear=4.0):
+    """
+    [R5] 訊號一致性分數（Consensus Score）
+
+    統計多少個指標同方向，量化「訊號一致」程度。
+
+    ≥ threshold_bull（預設 6.0）算多頭訊號
+    <  threshold_bear（預設 4.0）算空頭訊號
+    其餘算中性
+
+    回傳 dict：
+      consensus_score   0-100，越高越一致（多頭 or 空頭都算一致）
+      direction         "bullish" / "bearish" / "mixed"
+      bull_count        多頭指標數量（共 4 個指標）
+      bear_count        空頭指標數量
+      neutral_count     中性指標數量
+      signal_strength   "strong"（≥3 同向）/ "moderate"（2 同向）/ "weak"（分歧）
+      description       描述字串
+    """
+    scores = {
+        "tech": tech_score,
+        "fund": fund_score,
+        "inst": inst_score,
+        "news": news_score,
+    }
+    valid = {k: v for k, v in scores.items() if v is not None and v > 0}
+
+    bull_count = sum(1 for v in valid.values() if v >= threshold_bull)
+    bear_count = sum(1 for v in valid.values() if v < threshold_bear)
+    neutral_count = len(valid) - bull_count - bear_count
+    total = len(valid)
+
+    if total == 0:
+        return {
+            "consensus_score": 50,
+            "direction": "mixed",
+            "bull_count": 0, "bear_count": 0, "neutral_count": 0,
+            "signal_strength": "weak",
+            "description": "資料不足",
+        }
+
+    # consensus_score：同方向指標佔比 × 100
+    dominant = max(bull_count, bear_count)
+    consensus_score = int(dominant / total * 100)
+
+    if bull_count > bear_count:
+        direction = "bullish"
+    elif bear_count > bull_count:
+        direction = "bearish"
+    else:
+        direction = "mixed"
+
+    if dominant >= 3:
+        signal_strength = "strong"
+        desc = f"強訊號：{dominant}/{total} 個指標同方向（{direction}）"
+    elif dominant == 2:
+        signal_strength = "moderate"
+        desc = f"中等訊號：{dominant}/{total} 個指標同方向（{direction}）"
+    else:
+        signal_strength = "weak"
+        desc = f"訊號分歧：多頭 {bull_count} / 空頭 {bear_count} / 中性 {neutral_count}"
+
+    return {
+        "consensus_score": consensus_score,
+        "direction": direction,
+        "bull_count": bull_count,
+        "bear_count": bear_count,
+        "neutral_count": neutral_count,
+        "signal_strength": signal_strength,
+        "description": desc,
+    }
+
+
 def weighted_score(tech_score, fund_score, inst_score, news_score,
                    strategy="balanced", is_us=False, macro_multiplier=1.0,
                    news_age_days=0):

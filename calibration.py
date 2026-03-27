@@ -7,10 +7,51 @@
 2. Spearman 等級相關性（抓非線性關係）
 3. 時間衰減（近期資料權重更高）
 4. 分數分段準確率（不只看整體相關性）
+
+[R5] 新增：
+5. save_calibration_results() / load_calibration_results() — 持久化校準結果
 """
+import os
+import json
+from datetime import datetime
 import numpy as np
 import tracker
 from scipy import stats as scipy_stats
+
+# 校準結果儲存路徑
+_CALIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+_CALIB_FILE = os.path.join(_CALIB_DIR, "calibration_results.json")
+
+
+def save_calibration_results(results: dict) -> str:
+    """
+    [R5] 把 calibrate() 的回傳結果存到 JSON 檔。
+
+    回傳：儲存路徑
+    """
+    os.makedirs(_CALIB_DIR, exist_ok=True)
+    payload = {
+        "saved_at": datetime.now().isoformat(),
+        "results": results,
+    }
+    with open(_CALIB_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+    return _CALIB_FILE
+
+
+def load_calibration_results() -> dict | None:
+    """
+    [R5] 載入上次儲存的校準結果。
+
+    回傳：dict（含 saved_at + results）或 None（不存在）
+    """
+    if not os.path.exists(_CALIB_FILE):
+        return None
+    try:
+        with open(_CALIB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def calibrate(price_fetcher, days_after=10, min_samples=10):

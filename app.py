@@ -58,6 +58,7 @@ page = st.sidebar.radio("功能", [
     "📈 歷史回測",
     "📋 訊號追蹤",
     "⭐ 自訂追蹤",
+    "📒 交易日誌",
 ])
 
 st.sidebar.markdown("---")
@@ -1005,6 +1006,25 @@ elif page == "💼 持倉監控":
                     else:
                         st.metric("狀態", "✅ 全部正常")
 
+                # ===== [R5] 整體資金回撤檢查 =====
+                import risk_management as _rm
+                _dd = _rm.check_portfolio_drawdown(
+                    [{"buy_price": r["buy_price"], "current_price": r["current_price"],
+                      "shares": r["shares"]} for r in results],
+                    TOTAL_BUDGET,
+                    drawdown_threshold=0.15,
+                )
+                if _dd["risk_level"] == "critical":
+                    st.error(_dd["action"])
+                elif _dd["risk_level"] == "warning":
+                    st.warning(_dd["action"])
+                else:
+                    st.info(_dd["action"])
+                st.caption(
+                    f"持倉成本 {_dd['total_cost']:,.0f} 元　"
+                    f"回撤上限 {_dd['threshold_pct']:.0f}%（{TOTAL_BUDGET * _dd['threshold_pct'] / 100:,.0f} 元）"
+                )
+
                 # 各持倉狀況
                 for r in results:
                     emoji = "🚨" if r["warnings"] else "✅"
@@ -1037,6 +1057,58 @@ elif page == "💼 持倉監控":
                             st.caption("📊 週線趨勢：多頭")
                         elif wt == "bearish":
                             st.caption("📊 週線趨勢：空頭")
+
+                        # ===== [R5] 風險管理：ATR 移動停損 + 分批停利 =====
+                        _h_data = next((h for h in HOLDINGS if h["stock_id"] == r["stock_id"]), {})
+                        _entry_stop = _h_data.get("stop_loss", 0) or 0
+                        _peak = _h_data.get("peak_price", None)
+                        # 從 atr_stop 反推 ATR（atr_stop = buy_price - 2×ATR）
+                        _atr_stop_price = r.get("atr_stop", 0) or 0
+                        _buy_p = r["buy_price"]
+                        _atr_est = (_buy_p - _atr_stop_price) / 2.0 if _atr_stop_price > 0 and _buy_p > _atr_stop_price else _buy_p * 0.02
+
+                        with st.expander("🛡 風險管理詳情"):
+                            _rm_c1, _rm_c2 = st.columns(2)
+                            _trail = _rm.calc_atr_trailing_stop(
+                                r["current_price"], _buy_p, _peak, _atr_est,
+                            )
+                            with _rm_c1:
+                                st.markdown("**ATR 移動停損**")
+                                st.metric("移動停損價", f"{_trail['trailing_stop']:.1f} 元",
+                                          delta=f"距現價 {(r['current_price'] - _trail['trailing_stop']):.1f}" if r['current_price'] > 0 else None)
+                                st.caption(f"類型：{_trail['stop_type']}")
+                                st.caption(f"ATR 距離：{_trail['atr_distance']:.1f} 元（停損幅 {_trail['stop_pct']:.1f}%）")
+                                if _trail["should_exit"]:
+                                    st.error("🚨 已觸及移動停損！建議立即執行")
+
+                            _eff_stop = _entry_stop if _entry_stop > 0 else _trail["initial_stop"]
+                            _tp = _rm.calc_partial_tp(
+                                r["current_price"], _buy_p, r["shares"],
+                                entry_stop=_eff_stop,
+                            )
+                            with _rm_c2:
+                                st.markdown("**分批停利（R 系統）**")
+                                r_color = "normal" if _tp["current_r"] >= 0 else "inverse"
+                                st.metric("當前 R 倍數", f"{_tp['current_r']:+.2f} R", delta_color=r_color)
+                                st.caption(f"1R 目標：{_tp['tp1_price']:.1f} 元 → 減 {_tp['tp1_shares']} 股")
+                                st.caption(f"2R 目標：{_tp['tp2_price']:.1f} 元 → 減 {_tp['tp2_shares']} 股")
+                                if _tp["tp2_reached"]:
+                                    st.success(_tp["action"])
+                                elif _tp["tp1_reached"]:
+                                    st.info(_tp["action"])
+                                else:
+                                    st.caption(_tp["action"])
+
+                            _metrics = _rm.get_position_risk_metrics(
+                                {"buy_price": _buy_p, "shares": r["shares"],
+                                 "current_price": r["current_price"], "stop_loss": _eff_stop},
+                                TOTAL_BUDGET, trailing_stop_price=_trail["trailing_stop"],
+                            )
+                            st.caption(
+                                f"倉位佔總資金 **{_metrics['position_pct']:.1f}%**　"
+                                f"停損風險 **{_metrics['risk_pct']:.2f}%** 總資金　"
+                                f"最大虧損額 **{_metrics['risk_amount']:,.0f} 元**"
+                            )
 
                 # 關聯性分析（第三輪升級：壓力測試 + 穩定度）
                 if len(results) >= 2:
@@ -1417,6 +1489,102 @@ elif page == "📋 訊號追蹤":
                 else:
                     st.warning("無法驗證 — 可能日期太近（股價還沒走出來）或資料抓取失敗。至少要等 5 個交易日才能驗證。")
 
+            # ===== [R5] 訊號一致性分析 =====
+            st.markdown("---")
+            st.markdown("### 🔄 訊號一致性分析（Consensus Score）")
+            st.caption("統計多少個指標同方向，分歧大的訊號信心度自動降低")
+
+            from scoring import calc_consensus_score as _calc_cs
+            _cs_df_rows = []
+            for _, row in df.iterrows():
+                cs = _calc_cs(row.get("tech", 5), row.get("fund", 5),
+                              row.get("inst", 5), row.get("news", 5) if "news" in row else 5)
+                _cs_df_rows.append({
+                    "代號": row.get("stock_id", ""),
+                    "名稱": row.get("name", ""),
+                    "綜合": row.get("avg", 0),
+                    "一致性": cs["consensus_score"],
+                    "方向": "多頭" if cs["direction"] == "bullish" else ("空頭" if cs["direction"] == "bearish" else "分歧"),
+                    "強度": cs["signal_strength"],
+                    "說明": cs["description"],
+                })
+            if _cs_df_rows:
+                _cs_df = pd.DataFrame(_cs_df_rows).sort_values("一致性", ascending=False)
+                # 強訊號
+                _strong = _cs_df[(_cs_df["強度"] == "strong") & (_cs_df["方向"] == "多頭")]
+                if not _strong.empty:
+                    st.success(f"⭐ 強多頭訊號（{len(_strong)} 檔）：{', '.join(_strong['名稱'].tolist()[:5])}")
+                _weak_conflict = _cs_df[(_cs_df["一致性"] < 50) & (_cs_df["綜合"] >= 6)]
+                if not _weak_conflict.empty:
+                    st.warning(f"⚠ 高分但訊號分歧（{len(_weak_conflict)} 檔）：{', '.join(_weak_conflict['名稱'].tolist()[:5])}")
+                with st.expander("查看完整一致性分析"):
+                    st.dataframe(_cs_df[["代號", "名稱", "綜合", "一致性", "方向", "強度", "說明"]],
+                                 use_container_width=True, hide_index=True)
+
+            # ===== [R5] 校準結果（儲存 + 顯示）=====
+            st.markdown("---")
+            st.markdown("### ⚙ 權重校準")
+            st.caption("分析歷史訊號與實際報酬的相關性，找出最有效的權重組合")
+
+            import calibration as _calib
+
+            _saved = _calib.load_calibration_results()
+            if _saved:
+                _sr = _saved.get("results", {})
+                st.success(f"上次校準：{_saved.get('saved_at', '')[:10]}　樣本 {_sr.get('sample_count', 0)} 筆　最佳窗口 {_sr.get('best_window', '?')} 天")
+                if _sr.get("recommended_weights"):
+                    _rw = _sr["recommended_weights"]
+                    st.markdown("**校準推薦權重：**")
+                    wc1, wc2, wc3, wc4 = st.columns(4)
+                    wc1.metric("技術面", f"{_rw.get('tech', 0)*100:.0f}%")
+                    wc2.metric("基本面", f"{_rw.get('fund', 0)*100:.0f}%")
+                    wc3.metric("籌碼面", f"{_rw.get('inst', 0)*100:.0f}%")
+                    wc4.metric("消息面", f"{_rw.get('news', 0)*100:.0f}%")
+
+                if _sr.get("multi_window"):
+                    with st.expander("各持有週期相關性"):
+                        _mw = _sr["multi_window"]
+                        _rows = []
+                        for w, info in sorted(_mw.items()):
+                            _rows.append({
+                                "持有天數": f"{w}天",
+                                "樣本數": info.get("sample_count", 0),
+                                "技術相關": info.get("correlations", {}).get("tech", {}).get("combined", 0),
+                                "基本相關": info.get("correlations", {}).get("fund", {}).get("combined", 0),
+                                "籌碼相關": info.get("correlations", {}).get("inst", {}).get("combined", 0),
+                                "消息相關": info.get("correlations", {}).get("news", {}).get("combined", 0),
+                            })
+                        if _rows:
+                            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+
+                if _sr.get("band_accuracy"):
+                    with st.expander("分數分段準確率"):
+                        _ba = _sr["band_accuracy"]
+                        _ba_rows = []
+                        for band, info in _ba.items():
+                            if info.get("count", 0) > 0:
+                                _ba_rows.append({
+                                    "分段": {"high": "高分（≥7）", "mid": "中分（4-7）", "low": "低分（<4）"}.get(band, band),
+                                    "樣本數": info["count"],
+                                    "準確率": f"{info['accuracy']:.1f}%",
+                                    "平均報酬": f"{info['avg_return']:+.2f}%",
+                                })
+                        if _ba_rows:
+                            st.dataframe(pd.DataFrame(_ba_rows), use_container_width=True, hide_index=True)
+
+            if st.button("執行權重校準（需要歷史資料）", use_container_width=True):
+                with st.spinner("計算中（分析多個時間窗口，需要幾分鐘）..."):
+                    try:
+                        _calib_result = _calib.calibrate(market.fetch_stock_price)
+                        if _calib_result.get("status") == "ok":
+                            _calib.save_calibration_results(_calib_result)
+                            st.success(f"校準完成！樣本 {_calib_result['sample_count']} 筆，最佳窗口 {_calib_result['best_window']} 天")
+                            st.rerun()
+                        else:
+                            st.warning(_calib_result.get("message", "校準失敗"))
+                    except Exception as _e:
+                        st.error(f"校準失敗：{_e}")
+
 
 # ===== 自訂追蹤 =====
 elif page == "⭐ 自訂追蹤":
@@ -1669,3 +1837,185 @@ elif page == "📊 持倉分析":
                             f"　{sid}：勝率 {wr:.0%}　盈虧比 {avg_w/avg_l:.2f}　"
                             f"→ Half-Kelly 建議 {kelly*100:.1f}%"
                         )
+
+
+# ===== [R5] 交易日誌 =====
+elif page == "📒 交易日誌":
+    st.title("📒 交易日誌")
+    st.caption("記錄每筆進出場，追蹤真實績效，計算 Alpha")
+
+    import trade_journal as tj
+
+    tab_open, tab_closed, tab_stats, tab_add = st.tabs(
+        ["📌 持倉中", "📜 歷史交易", "📊 績效報告", "➕ 新增記錄"]
+    )
+
+    # ── Tab 1: 持倉中的交易 ──────────────────────────────────────────────────
+    with tab_open:
+        st.markdown("### 目前持倉中的交易")
+        open_trades = tj.get_all_trades(open_only=True)
+        if not open_trades:
+            st.info("目前沒有持倉中的交易記錄。到「新增記錄」tab 輸入進場資訊。")
+        else:
+            for t in open_trades:
+                with st.expander(f"#{t['id']} {t['stock_id']} {t['name']}　進場 {t['entry_date']}　@{t['entry_price']:.1f}　{t['shares']} 股"):
+                    oc1, oc2, oc3 = st.columns(3)
+                    oc1.metric("進場價", f"{t['entry_price']:.1f}")
+                    oc2.metric("進場分數", f"{t['entry_score']:.1f}/10" if t['entry_score'] else "—")
+                    oc3.metric("策略", t.get("strategy", "—"))
+                    if t.get("entry_reason"):
+                        st.caption(f"進場理由：{t['entry_reason']}")
+
+                    st.markdown("**記錄出場**")
+                    xc1, xc2 = st.columns(2)
+                    with xc1:
+                        _xdate = st.date_input("出場日期", key=f"xd_{t['id']}")
+                        _xprice = st.number_input("出場價", min_value=0.0, step=0.1, key=f"xp_{t['id']}", format="%.1f")
+                    with xc2:
+                        _xreason = st.text_input("出場理由", placeholder="停損/停利/訊號轉空…", key=f"xr_{t['id']}")
+                        _xus = st.checkbox("美股（免稅費）", key=f"xu_{t['id']}")
+                    if st.button("確認出場", key=f"close_{t['id']}", type="primary"):
+                        if _xprice > 0:
+                            res = tj.close_trade(t["id"], str(_xdate), _xprice, _xreason, _xus)
+                            if "error" not in res:
+                                pnl_color = "✅" if res["pnl"] >= 0 else "🔴"
+                                st.success(f"{pnl_color} 已結算：損益 {res['pnl']:+,.0f} 元（{res['pnl_pct']:+.2f}%）")
+                                st.rerun()
+                            else:
+                                st.error(res["error"])
+                    if st.button("🗑 刪除", key=f"del_open_{t['id']}"):
+                        tj.delete_trade(t["id"])
+                        st.rerun()
+
+    # ── Tab 2: 歷史已結算交易 ────────────────────────────────────────────────
+    with tab_closed:
+        st.markdown("### 歷史交易記錄")
+        closed_df = tj.get_trades_df()
+        if closed_df.empty:
+            st.info("還沒有已結算的交易記錄。")
+        else:
+            # 格式化顯示
+            disp = closed_df[[
+                "id", "stock_id", "name", "strategy",
+                "entry_date", "entry_price", "exit_date", "exit_price",
+                "shares", "pnl", "pnl_pct", "entry_reason", "exit_reason",
+            ]].copy()
+            disp.columns = [
+                "ID", "代號", "名稱", "策略",
+                "進場日", "進場價", "出場日", "出場價",
+                "股數", "損益(元)", "損益(%)", "進場理由", "出場理由",
+            ]
+            st.dataframe(disp, use_container_width=True, hide_index=True, height=500)
+
+            # 刪除功能
+            del_id = st.number_input("輸入 ID 刪除記錄", min_value=1, step=1, value=1, key="del_id")
+            if st.button("刪除此筆", key="del_closed"):
+                tj.delete_trade(int(del_id))
+                st.rerun()
+
+    # ── Tab 3: 績效報告 ──────────────────────────────────────────────────────
+    with tab_stats:
+        st.markdown("### 整體績效")
+        _all_stats = tj.get_monthly_stats()
+
+        if _all_stats["trade_count"] == 0:
+            st.info("尚無已結算交易，無法計算績效。")
+        else:
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("總交易筆數", _all_stats["trade_count"])
+            sc2.metric("勝率", f"{_all_stats['win_rate']:.1f}%")
+            sc3.metric("複利總報酬", f"{_all_stats['total_return_pct']:+.2f}%")
+            sc4.metric("盈虧比", f"{_all_stats['profit_factor']:.2f}")
+
+            sc5, sc6, sc7, sc8 = st.columns(4)
+            sc5.metric("總損益", f"{_all_stats['total_pnl']:+,.0f} 元")
+            sc6.metric("最大回撤", f"{_all_stats['max_drawdown_pct']:.2f}%", delta_color="inverse")
+            sc7.metric("平均獲利", f"{_all_stats['avg_win_pct']:+.2f}%")
+            sc8.metric("平均虧損", f"-{_all_stats['avg_loss_pct']:.2f}%")
+
+            # Alpha 計算
+            st.markdown("---")
+            st.markdown("### Alpha（超額報酬）")
+            _alpha = tj.calc_alpha(market.fetch_stock_price, "0050")
+            if _alpha["has_benchmark"]:
+                ac1, ac2, ac3 = st.columns(3)
+                ac1.metric("系統報酬", f"{_alpha['system_total_return']:+.2f}%")
+                ac2.metric("0050 報酬", f"{_alpha['benchmark_return']:+.2f}%")
+                delta_val = _alpha['alpha']
+                ac3.metric("Alpha", f"{delta_val:+.2f}%",
+                           delta=f"{'跑贏' if delta_val >= 0 else '跑輸'}大盤 {abs(delta_val):.2f}%")
+                st.caption(f"計算期間：{_alpha['period']}　共 {_alpha['trade_count']} 筆交易")
+            else:
+                st.info(f"系統總報酬 {_alpha['system_total_return']:+.2f}%（無法取得大盤資料做比較）")
+
+            # 月度報酬折線圖
+            st.markdown("---")
+            st.markdown("### 月度績效")
+            _monthly = tj.get_monthly_breakdown()
+            if _monthly:
+                _mdf = pd.DataFrame(_monthly)
+                _mdf = _mdf.set_index("year_month")
+
+                _mret_col, _mwin_col = st.columns(2)
+                with _mret_col:
+                    st.markdown("**月報酬率（%）**")
+                    st.bar_chart(_mdf["total_return_pct"])
+                with _mwin_col:
+                    st.markdown("**月勝率（%）**")
+                    st.line_chart(_mdf["win_rate"])
+
+                with st.expander("月度明細表"):
+                    _mdf_disp = _mdf.reset_index().rename(columns={
+                        "year_month": "月份", "trade_count": "交易數",
+                        "win_rate": "勝率(%)", "total_pnl": "損益(元)",
+                        "total_return_pct": "月報酬(%)",
+                    })
+                    st.dataframe(_mdf_disp, use_container_width=True, hide_index=True)
+
+            # 最佳 / 最差
+            st.markdown("---")
+            _best = _all_stats.get("best_trade", {})
+            _worst = _all_stats.get("worst_trade", {})
+            if _best and _worst:
+                bwc1, bwc2 = st.columns(2)
+                with bwc1:
+                    st.success(
+                        f"🏆 最佳交易：{_best.get('stock_id','')} {_best.get('name','')}　"
+                        f"{_best.get('pnl_pct',0):+.2f}%"
+                    )
+                with bwc2:
+                    st.error(
+                        f"💔 最差交易：{_worst.get('stock_id','')} {_worst.get('name','')}　"
+                        f"{_worst.get('pnl_pct',0):+.2f}%"
+                    )
+
+    # ── Tab 4: 新增記錄 ──────────────────────────────────────────────────────
+    with tab_add:
+        st.markdown("### 新增交易記錄")
+        with st.form("add_trade_form"):
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                _new_sid = st.text_input("股票代號", placeholder="例：2330 / NVDA")
+                _new_name = st.text_input("股票名稱（選填）", placeholder="例：台積電")
+                _new_edate = st.date_input("進場日期")
+                _new_eprice = st.number_input("進場價格", min_value=0.0, step=0.1, format="%.2f")
+            with fc2:
+                _new_shares = st.number_input("股數", min_value=1, step=100, value=1000)
+                _new_score = st.number_input("系統評分", min_value=0.0, max_value=10.0, step=0.1, value=6.0)
+                _new_strat = st.selectbox("策略", list(STRATEGIES.keys()),
+                                          format_func=lambda k: STRATEGIES[k]["label"])
+                _new_reason = st.text_area("進場理由", placeholder="例：技術面突破 + 籌碼買超，評分 7.2/10")
+            _submitted = st.form_submit_button("記錄進場", type="primary", use_container_width=True)
+            if _submitted and _new_sid and _new_eprice > 0 and _new_shares > 0:
+                _new_id = tj.add_entry(
+                    stock_id=_new_sid.strip().upper(),
+                    entry_date=str(_new_edate),
+                    entry_price=_new_eprice,
+                    shares=int(_new_shares),
+                    name=_new_name.strip(),
+                    strategy=_new_strat,
+                    entry_score=_new_score,
+                    entry_reason=_new_reason.strip(),
+                )
+                st.success(f"已記錄進場！ID={_new_id}，到「持倉中」tab 管理出場。")
+                st.rerun()
