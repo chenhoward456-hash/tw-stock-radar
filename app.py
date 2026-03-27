@@ -431,6 +431,76 @@ elif page == "🔍 個股分析":
                     if d.strip():
                         st.caption(d)
 
+        # ===== 白話結論（自動生成，取代問 Claude）=====
+        st.markdown("### 📝 白話結論")
+
+        # 算長線分數
+        if not etf and strategy_key != "longterm":
+            _long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+            _long_s = _long_r["score"]
+        elif strategy_key == "longterm":
+            _long_s = fund["score"]
+        else:
+            _long_s = 5
+
+        # 矛盾偵測
+        _short_good = avg >= 7
+        _long_good = _long_s >= 7
+        _short_bad = avg < 4
+        _long_bad = _long_s < 4
+
+        conclusions = []
+
+        if _short_good and _long_good:
+            conclusions.append(f"短線 {avg} + 長線 {_long_s} 都好，**各方面條件都到位**。如果你有閒錢，這檔值得認真研究。")
+        elif _short_good and not _long_good:
+            conclusions.append(f"短線 {avg} 好但長線只有 {_long_s}，**短線在漲但基本面撐不久**。要買就短打快跑，不適合長抱。")
+        elif not _short_good and _long_good:
+            conclusions.append(f"短線 {avg} 弱但長線 {_long_s} 好，**基本面好但股價還在跌**。適合逢低佈局，但要有耐心等回升。")
+        elif _short_bad and _long_bad:
+            conclusions.append(f"短線 {avg} + 長線 {_long_s} 都差，**現在不適合碰**。")
+        else:
+            conclusions.append(f"短線 {avg} + 長線 {_long_s}，**沒有明確訊號**，建議觀望。")
+
+        # 營收動能
+        for d in (fund["details"] if strategy_key != "longterm" else []):
+            pass
+        if strategy_key == "longterm" or not etf:
+            _lr = valuation.analyze_longterm(per_df, rev_df, price_df, ind) if strategy_key != "longterm" else {"details": fund.get("details", [])}
+            for d in _lr.get("details", []):
+                if "見頂" in d:
+                    conclusions.append("⚠ **營收動能見頂**，高峰可能已過，小心追高。")
+                    break
+                elif "加速" in d:
+                    conclusions.append("✓ **營收正在加速**，成長力道還在。")
+                    break
+
+        # 52 週位置
+        if not price_df.empty:
+            _closes = price_df["close"].astype(float)
+            _pos = (_closes.iloc[-1] - _closes.min()) / (_closes.max() - _closes.min()) * 100 if _closes.max() > _closes.min() else 50
+            if _pos > 85:
+                conclusions.append(f"⚠ 股價在 52 週高點附近（{_pos:.0f}%），**追高風險大**。")
+            elif _pos < 20:
+                conclusions.append(f"✓ 股價在 52 週低點（{_pos:.0f}%），**如果基本面沒壞，可能是好買點**。")
+
+        # 跟持倉的關聯
+        try:
+            _vars2 = {}
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py"), "r") as _f:
+                exec(_f.read(), _vars2)
+            _my_holdings = _vars2.get("HOLDINGS", [])
+            _my_sectors = set()
+            for _h in _my_holdings:
+                _my_sectors.add(market.fetch_stock_industry(_h["stock_id"]))
+            if ind and ind in _my_sectors:
+                conclusions.append(f"⚠ 你已經持有同產業的股票，買這檔等於**加碼同一個方向**，風險集中。")
+        except Exception:
+            pass
+
+        for c in conclusions:
+            st.markdown(c)
+
         # 資金配置
         if budget > 0 and "current_price" in tech:
             suggestion = portfolio.suggest(avg, tech["current_price"], budget)
