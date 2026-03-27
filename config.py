@@ -1,46 +1,36 @@
 """
 設定檔
-優先讀取環境變數 → Streamlit secrets → 內建預設值
-
-建議：在本機用 .env 檔案，雲端用 Streamlit secrets
-     不要把 key 直接 commit 到 git（改用環境變數）
+優先讀取：.env → 環境變數 → Streamlit secrets
+不要在這裡寫真實 key
 """
 import os
 
+# 先載入 .env
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def _get_secret(key, default=""):
-    """優先順序：環境變數 → Streamlit secrets → 預設值"""
-    # 1. 環境變數最優先
     val = os.environ.get(key, "")
     if val:
         return val
-
-    # 2. Streamlit secrets
     try:
         import streamlit as st
         if hasattr(st, "secrets") and key in st.secrets:
             return st.secrets[key]
     except Exception:
         pass
-
-    # 3. .env 檔案（如果有裝 python-dotenv）
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        val = os.environ.get(key, "")
-        if val:
-            return val
-    except ImportError:
-        pass
-
     return default
 
 
-FINMIND_TOKEN = _get_secret("FINMIND_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0yNiAwMDoyNjoxMiIsInVzZXJfaWQiOiJjaGVuaG93YXJkNDU2IiwiZW1haWwiOiJjaGVuaG93YXJkNDU2QGdtYWlsLmNvbSIsImlwIjoiMTgwLjE3Ny41OS43MCJ9.Bmmu9fCWfU9OZ84tbfVMgfRWtdBK7ZMY_Ety1hZAQ-g")
-TOTAL_BUDGET = 0
-LINE_CHANNEL_ACCESS_TOKEN = _get_secret("LINE_CHANNEL_ACCESS_TOKEN", "JSrN2ecWj84PsrNhYwCXHhI6N7ck3GBhrXYuRczXmCV1HGDdbqvVPA3vK9yIcHkwrIW++tuJBdMmCSHVVLxb/UFcRlJ3oBHUoGjpVomE4c0IDAfCOioSpe8HDlz93HXAbpEhncb5quFN2AouguR9TgdB04t89/1O/w1cDnyilFU=")
-LINE_USER_ID = _get_secret("LINE_USER_ID", "U3b425b2d1572d197d0992945323881e5")
-TELEGRAM_BOT_TOKEN = _get_secret("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = _get_secret("TELEGRAM_CHAT_ID", "")
-ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY", "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")
-LINE_CHANNEL_SECRET = _get_secret("LINE_CHANNEL_SECRET", "507140950973f944af055500e5b814a5")
+FINMIND_TOKEN = _get_secret("FINMIND_TOKEN")
+TOTAL_BUDGET = int(_get_secret("TOTAL_BUDGET", "0"))
+LINE_CHANNEL_ACCESS_TOKEN = _get_secret("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_USER_ID = _get_secret("LINE_USER_ID")
+TELEGRAM_BOT_TOKEN = _get_secret("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
+ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")
+LINE_CHANNEL_SECRET = _get_secret("LINE_CHANNEL_SECRET")

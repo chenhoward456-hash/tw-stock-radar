@@ -8,13 +8,16 @@ from datetime import datetime, timedelta
 import cache
 
 
+import threading
 _ticker_cache = {}
+_ticker_lock = threading.Lock()
 
 def _get_ticker(symbol):
     import yfinance as yf
-    if symbol not in _ticker_cache:
-        _ticker_cache[symbol] = yf.Ticker(symbol)
-    return _ticker_cache[symbol]
+    with _ticker_lock:
+        if symbol not in _ticker_cache:
+            _ticker_cache[symbol] = yf.Ticker(symbol)
+        return _ticker_cache[symbol]
 
 
 def fetch_stock_name(symbol):

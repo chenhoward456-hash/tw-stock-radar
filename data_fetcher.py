@@ -10,8 +10,10 @@ import cache
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
 
 
-def _fetch(dataset, stock_id=None, start_date=None, end_date=None, token=None):
-    """從 FinMind API 抓取資料"""
+def _fetch(dataset, stock_id=None, start_date=None, end_date=None, token=None, max_retries=3):
+    """從 FinMind API 抓取資料（含 exponential backoff 重試）"""
+    import time as _time
+
     params = {"dataset": dataset}
     if stock_id:
         params["data_id"] = str(stock_id)
@@ -22,23 +24,29 @@ def _fetch(dataset, stock_id=None, start_date=None, end_date=None, token=None):
     if token:
         params["token"] = token
 
-    try:
-        resp = requests.get(FINMIND_API, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(FINMIND_API, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
 
-        if data.get("status") != 200:
-            msg = data.get("msg", "未知錯誤")
-            if "token" in msg.lower() or "limit" in msg.lower():
-                print("  ⚠ 需要 FinMind Token，請到 config.py 設定（免費註冊即可）")
-            else:
-                print(f"  ⚠ API 回傳：{msg}")
-            return pd.DataFrame()
+            if data.get("status") != 200:
+                msg = data.get("msg", "未知錯誤")
+                if "token" in msg.lower() or "limit" in msg.lower():
+                    pass  # token 問題不重試
+                    return pd.DataFrame()
+                # 其他錯誤可以重試
+                if attempt < max_retries - 1:
+                    _time.sleep(2 ** attempt)
+                    continue
+                return pd.DataFrame()
 
-        return pd.DataFrame(data.get("data", []))
+            return pd.DataFrame(data.get("data", []))
 
-    except requests.exceptions.Timeout:
-        print("  ⚠ 連線逾時，請檢查網路")
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                _time.sleep(2 ** attempt)
+                continue
         return pd.DataFrame()
     except requests.exceptions.ConnectionError:
         print("  ⚠ 無法連線到 FinMind，請檢查網路")
