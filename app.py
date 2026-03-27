@@ -25,7 +25,7 @@ import tracker
 import streak
 import sector_rotation
 import macro
-from scoring import STRATEGIES, weighted_score
+from scoring import STRATEGIES, weighted_score, calc_consensus_score
 from watchlist import WATCHLIST
 
 st.set_page_config(page_title="投資雷達", page_icon="📊", layout="centered")
@@ -558,6 +558,25 @@ elif page == "🔍 個股分析":
                     if d.strip():
                         st.caption(d)
 
+        # [R5] Consensus Score — 訊號一致性
+        _consensus = calc_consensus_score(
+            tech["score"], fund["score"], inst["score"], news_result["score"],
+        )
+        _cs_dir_map = {"bullish": "多頭", "bearish": "空頭", "mixed": "分歧"}
+        _cs_str_map = {"strong": "強", "moderate": "中等", "weak": "弱"}
+        _cs_dir_label = _cs_dir_map.get(_consensus["direction"], "分歧")
+        _cs_str_label = _cs_str_map.get(_consensus["signal_strength"], "弱")
+
+        if _consensus["signal_strength"] == "strong":
+            if _consensus["direction"] == "bullish":
+                st.success(f"🔥 訊號一致性 **{_consensus['consensus_score']}/100**（{_cs_str_label}{_cs_dir_label}）— {_consensus['description']}")
+            else:
+                st.error(f"🔥 訊號一致性 **{_consensus['consensus_score']}/100**（{_cs_str_label}{_cs_dir_label}）— {_consensus['description']}")
+        elif _consensus["signal_strength"] == "moderate":
+            st.info(f"📊 訊號一致性 **{_consensus['consensus_score']}/100**（{_cs_str_label}{_cs_dir_label}）— {_consensus['description']}")
+        else:
+            st.warning(f"⚡ 訊號一致性 **{_consensus['consensus_score']}/100**（{_cs_dir_label}）— {_consensus['description']}")
+
         # ===== 白話結論（自動生成，取代問 Claude）=====
         st.markdown("### 📝 白話結論")
 
@@ -630,9 +649,11 @@ elif page == "🔍 個股分析":
 
         # 資金配置（改進：傳入 ATR 停損 + 相關性資訊）
         if budget > 0 and "current_price" in tech:
+            _suggest_stop = tech.get("stop_loss", tech.get("ma20"))
             suggestion = portfolio.suggest(
                 avg, tech["current_price"], budget,
                 atr=tech.get("atr"),
+                stop_price=_suggest_stop if _suggest_stop and _suggest_stop > 0 else None,
             )
             st.markdown("### 💰 資金配置建議")
             if suggestion:
@@ -658,6 +679,24 @@ elif page == "🔍 個股分析":
                     st.warning(suggestion["correlation_warning"])
                 if suggestion.get("position_warning"):
                     st.warning(suggestion["position_warning"])
+
+                # [R5] R 系統目標價 — 進場前就知道停損和停利在哪
+                import risk_management as _rm_ind
+                _ind_atr = tech.get("atr", 0) or tech["current_price"] * 0.02
+                _ind_stop = tech.get("stop_loss", tech.get("ma20", 0))
+                _ind_tp = _rm_ind.calc_partial_tp(
+                    tech["current_price"], tech["current_price"], 1000,
+                    entry_stop=_ind_stop if _ind_stop and _ind_stop > 0 else None,
+                    atr=_ind_atr,
+                )
+                if "error" not in _ind_tp:
+                    st.markdown("### 🎯 進場目標價（R 系統）")
+                    tc1, tc2, tc3, tc4 = st.columns(4)
+                    tc1.metric("停損", f"{_ind_tp['entry_stop']:.1f}")
+                    tc2.metric("1R 目標（減半倉）", f"{_ind_tp['tp1_price']:.1f}")
+                    tc3.metric("2R 目標（出清）", f"{_ind_tp['tp2_price']:.1f}")
+                    tc4.metric("3R 延伸", f"{_ind_tp['tp3_price']:.1f}")
+                    st.caption(f"1R = {_ind_tp['r_value']:.1f} 元　以現價進場，停損在 {_ind_tp['entry_stop']:.1f}")
             else:
                 st.info("目前評分偏低，不建議進場配置。")
 
@@ -727,6 +766,12 @@ elif page == "📡 觀察清單掃描":
                 long_result = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
                 long_score = long_result["score"]
 
+            # [R5] Consensus Score
+            _cs = calc_consensus_score(
+                tech["score"], fund["score"], inst_result["score"], news_score,
+            )
+            _cs_icon = "🔥" if _cs["signal_strength"] == "strong" else ("📊" if _cs["signal_strength"] == "moderate" else "⚡")
+
             return {
                 "代號": stock_id,
                 "名稱": sname,
@@ -736,6 +781,7 @@ elif page == "📡 觀察清單掃描":
                 "籌碼": inst_result["score"],
                 "短線": avg,
                 "長線": long_score,
+                "一致性": f"{_cs_icon}{_cs['consensus_score']}",
                 "訊號": SIGNAL_EMOJI[signal],
             }
 

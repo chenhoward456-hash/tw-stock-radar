@@ -19,6 +19,7 @@ import market
 import technical
 import fundamental
 import institutional
+from scoring import calc_consensus_score
 
 
 SIGNAL_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
@@ -92,6 +93,9 @@ def scan_one(stock_id):
         else:
             overall = "red"
 
+        # [R5] Consensus Score
+        cs = calc_consensus_score(tech["score"], fund["score"], inst["score"], 5.0)
+
         return {
             "tech": tech["score"],
             "fund": fund["score"],
@@ -99,6 +103,9 @@ def scan_one(stock_id):
             "avg": avg,
             "overall": overall,
             "highlights": "、".join(highlights) if highlights else "條件中性",
+            "consensus": cs["consensus_score"],
+            "consensus_dir": cs["direction"],
+            "consensus_strength": cs["signal_strength"],
         }
     except Exception:
         return None
@@ -237,14 +244,16 @@ def print_diff(diff_result):
 def print_table(results):
     """印出排名表格"""
     print()
-    print(f" {'排名':>2}  {'代號':<6} {'名稱':<6} {'板塊':<8} {'技術':>4} {'基本':>4} {'籌碼':>4} {'綜合':>4}  訊號")
-    print(" " + "─" * 72)
+    print(f" {'排名':>2}  {'代號':<6} {'名稱':<6} {'板塊':<8} {'技術':>4} {'基本':>4} {'籌碼':>4} {'綜合':>4} {'一致':>4}  訊號")
+    print(" " + "─" * 78)
 
     for i, r in enumerate(results, 1):
         icon = SIGNAL_ICON[r["overall"]]
+        cs = r.get("consensus", "")
+        cs_str = f"{cs:>3}" if cs != "" else "  —"
         print(
             f" {i:>2}.  {r['stock_id']:<6} {r['name']:<6} {r['sector']:<8}"
-            f" {r['tech']:>4} {r['fund']:>4} {r['inst']:>4} {r['avg']:>4}  {icon}"
+            f" {r['tech']:>4} {r['fund']:>4} {r['inst']:>4} {r['avg']:>4} {cs_str}  {icon}"
         )
 
 
