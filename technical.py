@@ -1,6 +1,7 @@
 """
 技術面分析模組
 均線、RSI、MACD、KD隨機指標、布林通道
+第三輪優化：多時間框架（週線確認）、RSI 背離偵測、動態指標權重
 """
 import pandas as pd
 import numpy as np
@@ -72,6 +73,113 @@ def _atr(high, low, close, period=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(window=period).mean()
     return atr
+
+
+def _resample_weekly(df):
+    """將日線轉為週線（用於多時間框架分析）"""
+    if df.empty or len(df) < 10:
+        return pd.DataFrame()
+    wdf = df.copy()
+    wdf["date"] = pd.to_datetime(wdf["date"])
+    wdf = wdf.set_index("date")
+
+    agg = {
+        "open": "first",
+        "close": "last",
+        "Trading_Volume": "sum",
+    }
+    if "max" in wdf.columns:
+        agg["max"] = "max"
+    if "min" in wdf.columns:
+        agg["min"] = "min"
+
+    weekly = wdf.resample("W").agg(agg).dropna(subset=["close"])
+    weekly = weekly.reset_index()
+    weekly["date"] = weekly["date"].dt.strftime("%Y-%m-%d")
+    return weekly
+
+
+def _weekly_trend(price_df):
+    """
+    週線趨勢判斷：MA5 vs MA20（週線），回傳方向和信心度
+    回傳：{"trend": "bullish/bearish/neutral", "strength": float, "detail": str}
+    """
+    wdf = _resample_weekly(price_df)
+    if wdf.empty or len(wdf) < 22:
+        return {"trend": "neutral", "strength": 0, "detail": "週線資料不足"}
+
+    close = wdf["close"].astype(float)
+    ma5w = close.rolling(5).mean()
+    ma20w = close.rolling(20).mean()
+
+    if ma5w.iloc[-1] is None or ma20w.iloc[-1] is None:
+        return {"trend": "neutral", "strength": 0, "detail": "週線均線資料不足"}
+
+    curr_ma5 = ma5w.iloc[-1]
+    curr_ma20 = ma20w.iloc[-1]
+    curr_close = close.iloc[-1]
+
+    # 週線 RSI
+    rsi_w = _rsi(close, period=14)
+    w_rsi = rsi_w.iloc[-1] if not np.isnan(rsi_w.iloc[-1]) else 50
+
+    # 判斷趨勢
+    if curr_ma5 > curr_ma20 and curr_close > curr_ma20:
+        # 週線多頭
+        spread = (curr_ma5 / curr_ma20 - 1) * 100
+        strength = min(1.0, spread / 5)  # 5% spread = 最大信心
+        trend = "bullish"
+        detail = f"週線多頭（MA5w {curr_ma5:.1f} > MA20w {curr_ma20:.1f}，RSI {w_rsi:.0f}）"
+    elif curr_ma5 < curr_ma20 and curr_close < curr_ma20:
+        spread = (1 - curr_ma5 / curr_ma20) * 100
+        strength = min(1.0, spread / 5)
+        trend = "bearish"
+        detail = f"週線空頭（MA5w {curr_ma5:.1f} < MA20w {curr_ma20:.1f}，RSI {w_rsi:.0f}）"
+    else:
+        trend = "neutral"
+        strength = 0
+        detail = f"週線中性（MA5w {curr_ma5:.1f} / MA20w {curr_ma20:.1f}，RSI {w_rsi:.0f}）"
+
+    return {"trend": trend, "strength": round(strength, 2), "detail": detail, "rsi": w_rsi}
+
+
+def _detect_rsi_divergence(close, rsi_series, lookback=30):
+    """
+    偵測 RSI 背離
+    - 多頭背離：股價創新低但 RSI 沒有 → 底部反轉訊號
+    - 空頭背離：股價創新高但 RSI 沒有 → 頂部反轉訊號
+    """
+    if len(close) < lookback + 5 or len(rsi_series) < lookback + 5:
+        return None
+
+    recent_close = close.iloc[-lookback:]
+    recent_rsi = rsi_series.iloc[-lookback:]
+
+    # 清除 NaN
+    valid = ~(recent_rsi.isna())
+    if valid.sum() < lookback // 2:
+        return None
+
+    # 找局部極值（簡化：分前後半段比較）
+    mid = lookback // 2
+    first_half_close = recent_close.iloc[:mid]
+    second_half_close = recent_close.iloc[mid:]
+    first_half_rsi = recent_rsi.iloc[:mid]
+    second_half_rsi = recent_rsi.iloc[mid:]
+
+    # 空頭背離：股價創新高但 RSI 沒有
+    if (second_half_close.max() > first_half_close.max() and
+            second_half_rsi.max() < first_half_rsi.max() and
+            second_half_rsi.max() > 60):
+        return "bearish_divergence"
+
+    # 多頭背離：股價創新低但 RSI 沒有
+    if (second_half_close.min() < first_half_close.min() and
+            second_half_rsi.min() > first_half_rsi.min() and
+            second_half_rsi.min() < 40):
+        return "bullish_divergence"
+
+    return None
 
 
 def analyze(price_df):
@@ -265,6 +373,38 @@ def analyze(price_df):
     if pct_20d < -20:
         details.append("⚠ 中線跌幅已大，留意是否為趨勢破壞")
 
+    # ===== 多時間框架分析（第三輪新增）=====
+    weekly = _weekly_trend(price_df)
+    weekly_trend = weekly["trend"]
+    weekly_detail = weekly["detail"]
+    details.append(f"📊 {weekly_detail}")
+
+    # 日線 vs 週線交叉驗證
+    daily_bullish = above_ma20 and above_ma60
+    daily_bearish = not above_ma20 and not above_ma60
+
+    if daily_bullish and weekly_trend == "bullish":
+        details.append("✓ 日線+週線同步多頭（高信心進場）")
+        score += 1.5
+    elif daily_bullish and weekly_trend == "bearish":
+        details.append("⚠ 日線偏多但週線仍空，可能只是反彈")
+        score -= 1
+    elif daily_bearish and weekly_trend == "bullish":
+        details.append("— 日線偏空但週線仍多，可能只是回檔")
+        score += 0.5
+    elif daily_bearish and weekly_trend == "bearish":
+        details.append("⚠ 日線+週線同步空頭（避開）")
+        score -= 1.5
+
+    # ===== RSI 背離偵測（第三輪新增）=====
+    divergence = _detect_rsi_divergence(close, rsi_series)
+    if divergence == "bullish_divergence":
+        details.append("✓ RSI 多頭背離（股價新低但 RSI 未新低，可能築底）")
+        score += 1
+    elif divergence == "bearish_divergence":
+        details.append("⚠ RSI 空頭背離（股價新高但 RSI 未新高，動能衰竭）")
+        score -= 1
+
     # ===== ATR 動態停損（適應不同波動度的股票）=====
     atr_series = _atr(high, low, close)
     current_atr = atr_series.iloc[-1] if not np.isnan(atr_series.iloc[-1]) else 0
@@ -300,5 +440,7 @@ def analyze(price_df):
     result["rsi"] = current_rsi
     result["atr"] = current_atr
     result["stop_loss"] = stop_loss
+    result["weekly_trend"] = weekly_trend
+    result["divergence"] = divergence
 
     return result

@@ -33,6 +33,8 @@ import market
 import technical
 import fundamental
 import institutional
+import news as news_module
+from scoring import weighted_score
 
 
 SIGNAL_TEXT = {"green": "[綠燈]", "yellow": "[黃燈]", "red": "[紅燈]"}
@@ -87,6 +89,14 @@ def run_scan():
     names = market.fetch_stock_names(all_stocks)
     total = len(all_stocks)
 
+    # 掃描前取得一次總體經濟環境
+    try:
+        import macro as _macro
+        _macro_data = _macro.analyze()
+        _macro_mult = _macro_data["risk_multiplier"]
+    except Exception:
+        _macro_mult = 1.0
+
     def _scan_one(stock_id):
         name = names.get(stock_id, stock_id)
         price_df = market.fetch_stock_price(stock_id)
@@ -103,7 +113,19 @@ def run_scan():
             fund = fundamental.analyze(per_df, rev_df, industry)
         inst = institutional.analyze(inst_df)
 
-        avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
+        # 抓新聞（失敗給中性 5 分）
+        try:
+            news_result = news_module.analyze(stock_id, name)
+            news_score = news_result["score"]
+        except Exception:
+            news_score = 5.0
+
+        # 改用 weighted_score（跟主系統一致）
+        avg, _ = weighted_score(
+            tech["score"], fund["score"], inst["score"], news_score,
+            strategy="balanced", is_us=market.is_us(stock_id),
+            macro_multiplier=_macro_mult,
+        )
         overall = "green" if avg >= 7 else ("yellow" if avg >= 4 else "red")
 
         return {
@@ -113,6 +135,7 @@ def run_scan():
             "tech": tech["score"],
             "fund": fund["score"],
             "inst": inst["score"],
+            "news": news_score,
             "avg": avg,
             "overall": overall,
         }

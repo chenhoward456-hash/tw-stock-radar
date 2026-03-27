@@ -1,20 +1,38 @@
 """
 設定檔
-Repo 已改為 private，key 直接寫在這裡
+優先讀取環境變數 → Streamlit secrets → 內建預設值
+
+建議：在本機用 .env 檔案，雲端用 Streamlit secrets
+     不要把 key 直接 commit 到 git（改用環境變數）
 """
 import os
 
 
 def _get_secret(key, default=""):
+    """優先順序：環境變數 → Streamlit secrets → 預設值"""
+    # 1. 環境變數最優先
+    val = os.environ.get(key, "")
+    if val:
+        return val
+
+    # 2. Streamlit secrets
     try:
         import streamlit as st
         if hasattr(st, "secrets") and key in st.secrets:
             return st.secrets[key]
     except Exception:
         pass
-    val = os.environ.get(key, "")
-    if val:
-        return val
+
+    # 3. .env 檔案（如果有裝 python-dotenv）
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        val = os.environ.get(key, "")
+        if val:
+            return val
+    except ImportError:
+        pass
+
     return default
 
 

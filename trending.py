@@ -4,6 +4,11 @@
 用法：python3 trending.py
 
 你可以在下方 THEMES 字典裡自由新增題材和相關個股
+
+第三輪優化：
+1. 用 weighted_score 取代簡單平均（跟主系統一致）
+2. 新聞熱度加時間衰減（近期新聞權重更高）
+3. 題材穩定度（區分短暫炒作 vs 持續升溫）
 """
 import sys
 import os
@@ -12,10 +17,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from news import count_news_heat, fetch_news
+import news as news_module
 import market
 import technical
 import fundamental
 import institutional
+from scoring import weighted_score
 
 SIGNAL_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
@@ -67,7 +74,7 @@ def scan_theme(name, config):
 
 
 def quick_score(stock_id, token=None):
-    """快速取得單一股票綜合分數"""
+    """快速取得單一股票綜合分數（改用 weighted_score）"""
     try:
         price_df = market.fetch_stock_price(stock_id)
         per_df = market.fetch_per_pbr(stock_id)
@@ -83,7 +90,16 @@ def quick_score(stock_id, token=None):
             fund = fundamental.analyze(per_df, rev_df, ind)
         inst = institutional.analyze(inst_df)
 
-        avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
+        # 抓新聞分數
+        try:
+            news_result = news_module.analyze(stock_id, market.fetch_stock_name(stock_id))
+            news_score = news_result.get("score", 5.0)
+        except Exception:
+            news_score = 5.0
+
+        is_us = market.is_us(stock_id)
+        avg, _ = weighted_score(tech["score"], fund["score"], inst["score"], news_score, is_us=is_us)
+
         if avg >= 7:
             signal = "green"
         elif avg >= 4:
@@ -96,8 +112,6 @@ def quick_score(stock_id, token=None):
 
 
 def main():
-    token = FINMIND_TOKEN or None
-
     print()
     print("=" * 60)
     print(" 題材趨勢雷達 ".center(60))
@@ -137,26 +151,15 @@ def main():
         print()
         print(" " + "─" * 50)
         print()
-        print(" 📊 熱門題材個股掃描：")
+        print(" 📊 熱門題材個股掃描（使用加權評分）：")
 
-        # 收集所有需要掃描的股票（去重）
-        all_stocks = set()
-        for name, config, heat in top_themes:
-            for sid in config["stocks"]:
-                all_stocks.add((sid, name))
-
-        # 批次查詢名稱
-        stock_ids = [s[0] for s in all_stocks]
-        names = fetch_stock_names(stock_ids, token)
-
-        # 逐一分析
         for theme_name, config, heat in top_themes:
             print(f"\n  【{theme_name}】（熱度 {heat}）")
 
             for sid in config["stocks"]:
-                sname = names.get(sid, sid)
+                sname = market.fetch_stock_name(sid)
                 print(f"    {sid} {sname}...", end="", flush=True)
-                score, signal = quick_score(sid, token)
+                score, signal = quick_score(sid)
                 if score is not None:
                     icon = SIGNAL_ICON[signal]
                     print(f" {icon} {score}/10")

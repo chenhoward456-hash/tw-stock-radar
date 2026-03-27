@@ -303,7 +303,7 @@ if page == "🏠 今日焦點":
             except Exception:
                 pass
 
-    # ===== 連續訊號 =====
+    # ===== 連續訊號（第三輪升級：動量+信心+回歸偵測）=====
     try:
         streaks = streak.detect_streaks(min_streak=2)
         if streaks:
@@ -311,19 +311,30 @@ if page == "🏠 今日焦點":
             st.markdown("### 🔥 連續訊號")
             greens = {k: v for k, v in streaks.items() if v["type"] == "green"}
             reds = {k: v for k, v in streaks.items() if v["type"] == "red"}
+            reversions = {k: v for k, v in streaks.items() if v["type"] == "reversion"}
 
             if greens:
                 for sid, info in sorted(greens.items(), key=lambda x: x[1]["streak"], reverse=True):
-                    st.success(f"🟢 **{sid} {info['name']}** 連續 {info['streak']} 天綠燈（平均 {info['avg_score']}/10）")
+                    mom = info.get("momentum", "")
+                    conv = info.get("conviction", "")
+                    mom_tag = f" [{mom}]" if mom else ""
+                    conv_tag = f" 信心{conv}" if conv else ""
+                    st.success(f"🟢 **{sid} {info['name']}** 連續 {info['streak']} 天綠燈（平均 {info['avg_score']}/10{mom_tag}{conv_tag}）")
                 st.caption("連續 3 天以上綠燈 → 短線進場訊號")
 
             if reds:
                 for sid, info in sorted(reds.items(), key=lambda x: x[1]["streak"], reverse=True):
-                    st.error(f"🔴 **{sid} {info['name']}** 連續 {info['streak']} 天紅燈（平均 {info['avg_score']}/10）")
+                    mom = info.get("momentum", "")
+                    mom_tag = f" [{mom}]" if mom else ""
+                    st.error(f"🔴 **{sid} {info['name']}** 連續 {info['streak']} 天紅燈（平均 {info['avg_score']}/10{mom_tag}）")
+
+            if reversions:
+                for sid, info in reversions.items():
+                    st.warning(f"🔄 **{sid} {info['name']}** 從紅燈回升（前紅燈均分 {info.get('prev_red_avg', '?')} → 現在 {info['avg_score']}），可能反轉")
     except Exception:
         pass
 
-    # ===== 產業輪動 =====
+    # ===== 產業輪動（第三輪升級：相對強弱+波動率調整）=====
     try:
         rotation = sector_rotation.detect_rotation()
         if rotation:
@@ -334,10 +345,15 @@ if page == "🏠 今日焦點":
 
             if hot:
                 for r in hot:
-                    st.success(f"📈 **{r['sector']}** {r['label']}（{r['previous_avg']} → {r['current_avg']}，{r['change']:+.1f}）")
+                    rs_tag = f"（{r.get('rs_label', '')}）" if r.get('rs_label') else ""
+                    st.success(f"📈 **{r['sector']}** {r['label']}{rs_tag}（{r['previous_avg']} → {r['current_avg']}，{r['change']:+.1f}）")
             if cold:
                 for r in cold:
-                    st.error(f"📉 **{r['sector']}** {r['label']}（{r['previous_avg']} → {r['current_avg']}，{r['change']:+.1f}）")
+                    rs_tag = f"（{r.get('rs_label', '')}）" if r.get('rs_label') else ""
+                    st.error(f"📉 **{r['sector']}** {r['label']}{rs_tag}（{r['previous_avg']} → {r['current_avg']}，{r['change']:+.1f}）")
+
+            if rotation and rotation[0].get("market_avg"):
+                st.caption(f"全市場平均分數：{rotation[0]['market_avg']}/10")
 
             if not hot and not cold:
                 st.info("目前各產業分數變化不大，沒有明顯輪動。")
@@ -614,8 +630,15 @@ elif page == "📡 觀察清單掃描":
                 fund = fundamental.analyze(per_df, rev_df, ind)
             inst_result = institutional.analyze(inst_df)
 
+            # 掃描時也抓新聞（用 try 包裝，失敗就給 5 分中性）
+            try:
+                news_result = news.analyze(stock_id, sname)
+                news_score = news_result["score"]
+            except Exception:
+                news_score = 5.0
+
             avg, _ = weighted_score(
-                tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key,
+                tech["score"], fund["score"], inst_result["score"], news_score, strategy_key,
                 is_us=market.is_us(stock_id),
                 macro_multiplier=_scan_macro_mult,
             )
@@ -925,12 +948,27 @@ elif page == "💼 持倉監控":
                             for w in r["warnings"]:
                                 st.warning(w)
 
-                # 關聯性分析
+                        # 停利/停損資訊（第三輪新增）
+                        for info_msg in r.get("info", []):
+                            st.info(info_msg)
+
+                        # 再進場訊號（第三輪新增）
+                        for sig in r.get("reentry_signals", []):
+                            st.success(sig)
+
+                        # 週線趨勢
+                        wt = r.get("weekly_trend", "")
+                        if wt == "bullish":
+                            st.caption("📊 週線趨勢：多頭")
+                        elif wt == "bearish":
+                            st.caption("📊 週線趨勢：空頭")
+
+                # 關聯性分析（第三輪升級：壓力測試 + 穩定度）
                 if len(results) >= 2:
                     st.markdown("### 🔗 持倉關聯性分析")
                     stock_ids = [r["stock_id"] for r in results]
 
-                    with st.spinner("計算關聯性..."):
+                    with st.spinner("計算關聯性（含壓力測試）..."):
                         div = correlation.check_diversification(stock_ids)
 
                     for d in div["details"]:
@@ -940,6 +978,12 @@ elif page == "💼 持倉監控":
                     if not div["matrix"].empty:
                         st.markdown("**相關係數矩陣**（越接近 1 = 越容易同漲同跌）")
                         st.dataframe(div["matrix"], use_container_width=True)
+
+                    # 壓力測試矩陣
+                    if not div.get("stress_matrix", pd.DataFrame()).empty:
+                        with st.expander("壓力測試矩陣（下跌日的相關性）"):
+                            st.caption("市場下跌時的相關性 — 數字越高表示崩盤時越容易一起跌")
+                            st.dataframe(div["stress_matrix"], use_container_width=True)
 
 
 # ===== 題材趨勢 =====

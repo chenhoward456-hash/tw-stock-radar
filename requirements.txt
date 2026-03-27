@@ -5,3 +5,4 @@ anthropic>=0.80.0
 flask>=3.0.0
 streamlit>=1.30.0
 yfinance>=0.2.30
+scipy>=1.10.0

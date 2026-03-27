@@ -251,6 +251,82 @@ def fetch_etf_info(symbol):
         return {}
 
 
+def fetch_insider_and_margins(symbol):
+    """
+    取得內部人持股、獲利能力、盈餘驚喜（第三輪新增）
+    回傳：{"insider_pct": float, "gross_margin": float, "operating_margin": float,
+           "earnings_surprise": float, "details": list}
+    """
+    result = {"insider_pct": 0, "gross_margin": 0, "operating_margin": 0,
+              "earnings_surprise": None, "details": []}
+    try:
+        t = _get_ticker(symbol)
+        info = t.info
+
+        # 內部人持股
+        insider = info.get("heldPercentInsiders", 0) or 0
+        if insider:
+            insider_pct = insider * 100
+            result["insider_pct"] = round(insider_pct, 1)
+            if insider_pct > 10:
+                result["details"].append(f"✓ 內部人持股 {insider_pct:.1f}%（管理層有利益一致性）")
+            elif insider_pct > 5:
+                result["details"].append(f"— 內部人持股 {insider_pct:.1f}%")
+            elif insider_pct < 1:
+                result["details"].append(f"⚠ 內部人持股僅 {insider_pct:.1f}%（偏低）")
+
+        # 獲利能力（毛利率、營業利益率）
+        gm = info.get("grossMargins", 0) or 0
+        om = info.get("operatingMargins", 0) or 0
+        if gm:
+            result["gross_margin"] = round(gm * 100, 1)
+        if om:
+            result["operating_margin"] = round(om * 100, 1)
+
+        if gm > 0 and om > 0:
+            gm_pct = gm * 100
+            om_pct = om * 100
+            if gm_pct > 50:
+                result["details"].append(f"✓ 毛利率 {gm_pct:.0f}%（護城河強）")
+            elif gm_pct > 30:
+                result["details"].append(f"— 毛利率 {gm_pct:.0f}%")
+            else:
+                result["details"].append(f"⚠ 毛利率 {gm_pct:.0f}%（偏低）")
+
+            if om_pct > 20:
+                result["details"].append(f"✓ 營業利益率 {om_pct:.0f}%（獲利能力佳）")
+            elif om_pct < 5:
+                result["details"].append(f"⚠ 營業利益率 {om_pct:.0f}%（獲利能力弱）")
+
+        # 盈餘驚喜（EPS beat/miss）
+        try:
+            earnings = t.earnings_history
+            if earnings is not None and not earnings.empty:
+                # 取最近一季的 surprise
+                if "epsActual" in earnings.columns and "epsEstimate" in earnings.columns:
+                    latest = earnings.iloc[-1]
+                    actual = latest.get("epsActual", 0)
+                    estimate = latest.get("epsEstimate", 0)
+                    if actual and estimate and estimate != 0:
+                        surprise = (actual / estimate - 1) * 100
+                        result["earnings_surprise"] = round(surprise, 1)
+                        if surprise > 10:
+                            result["details"].append(f"✓ 最近一季 EPS 超預期 {surprise:+.1f}%")
+                        elif surprise > 0:
+                            result["details"].append(f"— 最近一季 EPS 小幅超預期 {surprise:+.1f}%")
+                        elif surprise < -10:
+                            result["details"].append(f"⚠ 最近一季 EPS 大幅低於預期 {surprise:+.1f}%")
+                        else:
+                            result["details"].append(f"— 最近一季 EPS 略低預期 {surprise:+.1f}%")
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+
+    return result
+
+
 def is_us_stock(symbol):
     """判斷是不是美股代號（含 BRK-B 這類帶符號的）"""
     if not symbol:
