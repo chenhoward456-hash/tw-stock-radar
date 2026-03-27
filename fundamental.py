@@ -355,3 +355,33 @@ def analyze(per_df, revenue_df, industry_category=""):
     result["score"] = round(score, 1)
     result["details"] = details
     return result
+
+
+def analyze_with_health(per_df, revenue_df, industry_category="", health_data=None):
+    """
+    [R4] 含財務健康指標的基本面分析（美股用）
+    health_data: data_fetcher_us.fetch_financial_health() 回傳的 dict
+    """
+    result = analyze(per_df, revenue_df, industry_category)
+
+    if health_data and isinstance(health_data, dict):
+        adj = health_data.get("score_adj", 0)
+        details_extra = health_data.get("details", [])
+
+        if details_extra:
+            result["details"].append("")
+            result["details"].append("— 財務健康檢查：")
+            result["details"].extend([f"  {d}" for d in details_extra])
+
+        if adj != 0:
+            result["score"] = round(max(1.0, min(10.0, result["score"] + adj)), 1)
+            if result["score"] >= 7:
+                result["signal"] = "green"
+            elif result["score"] >= 4:
+                result["signal"] = "yellow"
+            else:
+                result["signal"] = "red"
+
+        result["health"] = health_data
+
+    return result

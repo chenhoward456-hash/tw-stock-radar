@@ -3,6 +3,8 @@
 簡易回測 — 用歷史資料驗證訊號有沒有用
 用法：python3 backtest.py 2330
       python3 backtest.py 2330 365    (回測天數，預設 500)
+
+第四輪新增：Walk-forward 驗證 + Monte Carlo 信賴區間
 """
 import sys
 import os
@@ -114,13 +116,158 @@ def _calc_risk_metrics(trades, trading_days=252):
     }
 
 
+# =============================================================
+# [R4] Walk-Forward Validation
+# =============================================================
+def walk_forward(df, signal_func, trade_func, is_us=False,
+                 train_ratio=0.6, step_ratio=0.2, min_train=120):
+    """
+    滾動窗口 walk-forward 回測
+
+    做法：
+    1. 把資料切成 train(60%) + test(20%) + future(20%)
+    2. 在 train 上產生訊號，只看 test 段的交易結果
+    3. 窗口向前滑動，重複
+    4. 彙總所有 out-of-sample 交易
+
+    回傳：{
+        "oos_trades": list,   # 所有樣本外交易
+        "is_trades": list,    # 所有樣本內交易（對照用）
+        "windows": list,      # 每個窗口的 is/oos 績效
+        "overfitting_ratio": float  # IS Sharpe / OOS Sharpe
+    }
+    """
+    n = len(df)
+    train_size = max(min_train, int(n * train_ratio))
+    step_size = max(30, int(n * step_ratio))
+
+    all_oos_trades = []
+    all_is_trades = []
+    windows = []
+
+    start = 0
+    while start + train_size + step_size <= n:
+        train_end = start + train_size
+        test_end = min(train_end + step_size, n)
+
+        train_df = df.iloc[start:train_end].reset_index(drop=True)
+        full_df = df.iloc[start:test_end].reset_index(drop=True)
+
+        # 在完整區間（train+test）上跑訊號
+        signals_full, _ = signal_func(full_df)
+        trades_full = trade_func(signals_full, is_us=is_us)
+
+        # 分類：train 期間的交易 vs test 期間的交易
+        train_end_date = str(df.iloc[train_end - 1]["date"])[:10] if train_end < n else "9999-12-31"
+
+        is_trades = []
+        oos_trades = []
+        for t in trades_full:
+            buy_date = str(t["buy_date"])[:10]
+            if buy_date <= train_end_date:
+                is_trades.append(t)
+            else:
+                oos_trades.append(t)
+
+        # 也跑純 train 的結果
+        signals_train, _ = signal_func(train_df)
+        trades_train = trade_func(signals_train, is_us=is_us)
+
+        is_risk = _calc_risk_metrics(trades_train)
+        oos_risk = _calc_risk_metrics(oos_trades)
+
+        windows.append({
+            "train_start": str(df.iloc[start]["date"])[:10],
+            "train_end": train_end_date,
+            "test_end": str(df.iloc[test_end - 1]["date"])[:10],
+            "is_trades": len(trades_train),
+            "oos_trades": len(oos_trades),
+            "is_sharpe": is_risk.get("sharpe", 0),
+            "oos_sharpe": oos_risk.get("sharpe", 0),
+            "is_return": sum(t["return_pct"] for t in trades_train) if trades_train else 0,
+            "oos_return": sum(t["return_pct"] for t in oos_trades) if oos_trades else 0,
+        })
+
+        all_is_trades.extend(trades_train)
+        all_oos_trades.extend(oos_trades)
+
+        start += step_size
+
+    # 計算 overfitting ratio
+    is_risk_total = _calc_risk_metrics(all_is_trades)
+    oos_risk_total = _calc_risk_metrics(all_oos_trades)
+    is_sharpe = is_risk_total.get("sharpe", 0)
+    oos_sharpe = oos_risk_total.get("sharpe", 0)
+
+    if oos_sharpe != 0:
+        overfitting_ratio = round(is_sharpe / oos_sharpe, 2) if oos_sharpe > 0 else 99.0
+    else:
+        overfitting_ratio = 99.0 if is_sharpe > 0 else 1.0
+
+    return {
+        "oos_trades": all_oos_trades,
+        "is_trades": all_is_trades,
+        "windows": windows,
+        "overfitting_ratio": overfitting_ratio,
+        "is_risk": is_risk_total,
+        "oos_risk": oos_risk_total,
+    }
+
+
+# =============================================================
+# [R4] Monte Carlo Simulation
+# =============================================================
+def monte_carlo(trades, n_simulations=1000, n_trades=None):
+    """
+    Bootstrap Monte Carlo：隨機重排交易順序，模擬不同運氣下的結果
+    回傳信賴區間：5th / 25th / 50th / 75th / 95th percentile
+
+    用途：知道策略「最壞情況」和「最好情況」的範圍
+    """
+    if not trades or len(trades) < 3:
+        return None
+
+    returns = [t["return_pct"] / 100 for t in trades]
+    n = n_trades or len(returns)
+
+    final_equities = []
+    max_drawdowns = []
+
+    for _ in range(n_simulations):
+        # 隨機抽樣（放回）
+        sampled = np.random.choice(returns, size=n, replace=True)
+
+        # 模擬權益曲線
+        equity = 1.0
+        peak = 1.0
+        max_dd = 0
+        for r in sampled:
+            equity *= (1 + r)
+            if equity > peak:
+                peak = equity
+            dd = (equity / peak - 1) * 100
+            if dd < max_dd:
+                max_dd = dd
+
+        final_equities.append((equity - 1) * 100)  # 百分比報酬
+        max_drawdowns.append(max_dd)
+
+    pcts = [5, 25, 50, 75, 95]
+    return {
+        "return_percentiles": {
+            p: round(float(np.percentile(final_equities, p)), 1) for p in pcts
+        },
+        "drawdown_percentiles": {
+            p: round(float(np.percentile(max_drawdowns, p)), 1) for p in pcts
+        },
+        "n_simulations": n_simulations,
+        "n_trades": n,
+    }
+
+
 def generate_signals(df, stop_loss_pct=-8.0):
     """
     產生買賣訊號（均線交叉 + RSI 過濾 + 量能確認 + ATR 動態停損）
-    買進條件：黃金交叉 + RSI < 70 + 當日成交量 > 20日均量
-    賣出條件：死亡交叉（RSI > 30 才賣）或觸發 ATR 停損線
-
-    改進：停損改用 2 倍 ATR，不再用固定 -8%
     """
     close = df["close"].astype(float)
     high = df["max"].astype(float) if "max" in df.columns else close
@@ -198,11 +345,7 @@ def generate_signals(df, stop_loss_pct=-8.0):
 
 
 def generate_signals_trend(df, trailing_stop_pct=-10.0):
-    """
-    趨勢跟蹤策略（多頭也能贏）
-    進場：20MA 突破 60MA（大趨勢確認）
-    出場：從最高點回落 trailing_stop_pct，或 20MA 跌破 60MA
-    """
+    """趨勢跟蹤策略"""
     close = df["close"].astype(float)
     ma20 = close.rolling(20).mean()
     ma60 = close.rolling(60).mean()
@@ -217,11 +360,9 @@ def generate_signals_trend(df, trailing_stop_pct=-10.0):
         curr_diff = ma20.iloc[i] - ma60.iloc[i]
 
         if position:
-            # 追蹤最高價
             if close.iloc[i] > peak_price:
                 peak_price = close.iloc[i]
 
-            # 出場條件 1：從最高點回落超過門檻
             drawdown_from_peak = (close.iloc[i] / peak_price - 1) * 100
             if drawdown_from_peak <= trailing_stop_pct:
                 signals.append({
@@ -236,7 +377,6 @@ def generate_signals_trend(df, trailing_stop_pct=-10.0):
                 peak_price = 0
                 continue
 
-            # 出場條件 2：20MA 跌破 60MA（大趨勢反轉）
             if prev_diff >= 0 and curr_diff < 0:
                 signals.append({
                     "type": "SELL",
@@ -250,7 +390,6 @@ def generate_signals_trend(df, trailing_stop_pct=-10.0):
                 peak_price = 0
                 continue
 
-        # 進場：20MA 突破 60MA
         if not position and prev_diff <= 0 and curr_diff > 0:
             signals.append({
                 "type": "BUY",
@@ -267,11 +406,7 @@ def generate_signals_trend(df, trailing_stop_pct=-10.0):
 
 
 def generate_signals_value(df, trailing_stop_pct=-12.0):
-    """
-    長線佈局策略（逢低買、漲高賣）
-    進場：股價在 52 週低點附近（位置 < 25%）+ 20MA 開始回升
-    出場：漲到 52 週高點附近（位置 > 85%）或移動停利
-    """
+    """長線佈局策略"""
     close = df["close"].astype(float)
     ma20 = close.rolling(20).mean()
 
@@ -280,8 +415,7 @@ def generate_signals_value(df, trailing_stop_pct=-12.0):
     buy_price = 0
     peak_price = 0
 
-    for i in range(120, len(df)):  # 需要足夠歷史算 52 週範圍
-        # 52 週高低點（用過去 240 個交易日，或有多少算多少）
+    for i in range(120, len(df)):
         lookback = min(i, 240)
         window = close.iloc[i - lookback:i + 1]
         high_52 = window.max()
@@ -292,15 +426,12 @@ def generate_signals_value(df, trailing_stop_pct=-12.0):
 
         position_pct = (close.iloc[i] - low_52) / (high_52 - low_52) * 100
 
-        # 20MA 方向
         ma20_rising = ma20.iloc[i] > ma20.iloc[i - 5] if i >= 5 else False
 
         if position:
-            # 追蹤最高價
             if close.iloc[i] > peak_price:
                 peak_price = close.iloc[i]
 
-            # 出場 1：移動停利
             drawdown = (close.iloc[i] / peak_price - 1) * 100
             if drawdown <= trailing_stop_pct:
                 signals.append({
@@ -315,7 +446,6 @@ def generate_signals_value(df, trailing_stop_pct=-12.0):
                 peak_price = 0
                 continue
 
-            # 出場 2：漲到 52 週高點附近（目標達成）
             if position_pct > 85:
                 gain = (close.iloc[i] / buy_price - 1) * 100
                 signals.append({
@@ -330,7 +460,6 @@ def generate_signals_value(df, trailing_stop_pct=-12.0):
                 peak_price = 0
                 continue
 
-        # 進場：52 週低點附近 + 20MA 開始回升（確認不是繼續往下）
         if not position and position_pct < 25 and ma20_rising:
             signals.append({
                 "type": "BUY",
@@ -347,23 +476,17 @@ def generate_signals_value(df, trailing_stop_pct=-12.0):
 
 
 def calculate_trades(signals, is_us=False):
-    """
-    從訊號列表計算每筆交易的損益（含交易成本 + 滑價）
-
-    改進：加入滑價假設（每筆交易多 0.1% 成本）
-    """
-    slippage = SLIPPAGE_PCT / 100  # 0.1% 滑價
+    """從訊號列表計算每筆交易的損益（含交易成本 + 滑價）"""
+    slippage = SLIPPAGE_PCT / 100
 
     if is_us:
-        # 美股：多數券商零佣金，但加滑價
         BUY_FEE = 0.0
         SELL_FEE = 0.0
         TAX = 0.0
     else:
-        # 臺股交易成本
-        BUY_FEE = 0.001425    # 買入手續費 0.1425%
-        SELL_FEE = 0.001425   # 賣出手續費 0.1425%
-        TAX = 0.003           # 證交稅 0.3%（賣出時收）
+        BUY_FEE = 0.001425
+        SELL_FEE = 0.001425
+        TAX = 0.003
 
     trades = []
     i = 0
@@ -372,7 +495,6 @@ def calculate_trades(signals, is_us=False):
             buy_price = signals[i]["price"]
             sell_price = signals[i + 1]["price"]
 
-            # 扣除交易成本 + 滑價
             actual_buy = buy_price * (1 + BUY_FEE + slippage)
             actual_sell = sell_price * (1 - SELL_FEE - TAX - slippage)
             ret = (actual_sell / actual_buy - 1) * 100
@@ -393,10 +515,12 @@ def calculate_trades(signals, is_us=False):
     return trades
 
 
-def print_report(stock_id, stock_name, df, trades, still_holding, is_us=False, strategy_name="均線交叉 + RSI 過濾 + 量能確認 + 停損 -8%"):
-    """印出回測報告"""
+def print_report(stock_id, stock_name, df, trades, still_holding, is_us=False,
+                 strategy_name="均線交叉 + RSI 過濾 + 量能確認 + 停損 -8%",
+                 wf_result=None, mc_result=None):
+    """印出回測報告（R4：含 walk-forward 和 Monte Carlo）"""
     close = df["close"].astype(float)
-    start_price = close.iloc[20]  # 策略開始時的價格
+    start_price = close.iloc[20]
     end_price = close.iloc[-1]
     buy_hold_return = (end_price / start_price - 1) * 100
     period_start = df.iloc[20]["date"]
@@ -486,7 +610,7 @@ def print_report(stock_id, stock_name, df, trades, still_holding, is_us=False, s
         profit_ratio = avg_win / avg_loss if avg_loss > 0 else 0
         print(f"  盈虧比：{profit_ratio:.2f}（> 1.5 較理想）")
 
-        # 風險調整指標（第三輪新增）
+        # 風險調整指標
         risk = _calc_risk_metrics(trades)
         if risk:
             print(f"\n 風險調整指標：")
@@ -498,6 +622,50 @@ def print_report(stock_id, stock_name, df, trades, still_holding, is_us=False, s
                 print(f"  最大回撤跨度：{risk['max_dd_trades']} 筆交易")
             print(f"  平均持有天數：{risk['avg_hold_days']:.0f} 天")
             print(f"  年化交易頻率：約 {risk['trades_per_year']:.0f} 筆/年")
+
+    # [R4] Walk-Forward 結果
+    if wf_result and wf_result.get("oos_trades"):
+        print(f"\n 📋 Walk-Forward 驗證（樣本外）：")
+        print(" " + "─" * (w - 2))
+        oos = wf_result
+        oos_risk = oos.get("oos_risk", {})
+        is_risk = oos.get("is_risk", {})
+        print(f"  樣本內交易：{len(oos['is_trades'])} 筆，Sharpe {is_risk.get('sharpe', 'N/A')}")
+        print(f"  樣本外交易：{len(oos['oos_trades'])} 筆，Sharpe {oos_risk.get('sharpe', 'N/A')}")
+        print(f"  過擬合比率：{oos['overfitting_ratio']}（IS/OOS Sharpe，越接近 1.0 越好）")
+
+        if oos["overfitting_ratio"] > 3:
+            print(f"  🚨 嚴重過擬合！樣本內績效遠好於樣本外")
+        elif oos["overfitting_ratio"] > 1.5:
+            print(f"  ⚠ 輕微過擬合，策略穩定性需觀察")
+        elif oos["overfitting_ratio"] <= 1.2 and oos_risk.get("sharpe", 0) > 0:
+            print(f"  ✓ 策略在樣本外表現穩定，可信度高")
+
+        # 每個窗口概況
+        if oos.get("windows"):
+            print(f"\n  窗口明細：")
+            for i, win in enumerate(oos["windows"], 1):
+                print(
+                    f"    #{i} train→{win['train_end']} | "
+                    f"IS: {win['is_trades']}筆 Sharpe={win['is_sharpe']} | "
+                    f"OOS: {win['oos_trades']}筆 Sharpe={win['oos_sharpe']}"
+                )
+
+    # [R4] Monte Carlo 結果
+    if mc_result:
+        print(f"\n 🎲 Monte Carlo 模擬（{mc_result['n_simulations']} 次）：")
+        print(" " + "─" * (w - 2))
+        rp = mc_result["return_percentiles"]
+        dp = mc_result["drawdown_percentiles"]
+        print(f"  累計報酬信賴區間：")
+        print(f"    最差 5%：{rp[5]:+.1f}%")
+        print(f"    25 分位：{rp[25]:+.1f}%")
+        print(f"    中位數 ：{rp[50]:+.1f}%")
+        print(f"    75 分位：{rp[75]:+.1f}%")
+        print(f"    最好 5%：{rp[95]:+.1f}%")
+        print(f"  最大回撤信賴區間：")
+        print(f"    最差 5%：{dp[5]:.1f}%")
+        print(f"    中位數 ：{dp[50]:.1f}%")
 
     # 流動性警告
     liquidity_warn = _check_liquidity(df)
@@ -512,8 +680,10 @@ def print_report(stock_id, stock_name, df, trades, still_holding, is_us=False, s
     else:
         print(f"  • 已計算手續費（買賣各 0.1425%）+ 證交稅 0.3% + 滑價 {SLIPPAGE_PCT}%")
     print(f"  • 停損改用 ATR 動態計算（2倍ATR，適應不同波動度）")
-    print(f"  • 大盤 ETF 長期向上，買進持有本來就會贏，回測重點是看風控和最大虧損")
-    print(f"  • 系統的價值在「選股＋風控」：幫你判斷該不該買、何時該跑")
+    if wf_result:
+        print(f"  • Walk-Forward 驗證：只看「樣本外」績效，防止 curve-fitting")
+    if mc_result:
+        print(f"  • Monte Carlo：模擬 {mc_result['n_simulations']} 種交易排列，測試運氣成分")
     if len(trades) < 5:
         print(f"  • 交易次數偏少（{len(trades)} 次），統計意義有限")
 
@@ -557,11 +727,29 @@ def main():
     trades_a = calculate_trades(signals_a, is_us=is_us)
     print(f"  → {len(trades_a)} 筆交易")
 
+    # [R4] Walk-Forward + Monte Carlo（只在資料夠多時跑）
+    wf_a = None
+    mc_a = None
+    if len(price_df) >= 200:
+        print(f"  [R4] Walk-Forward 驗證...")
+        wf_a = walk_forward(price_df, generate_signals, calculate_trades, is_us=is_us)
+        print(f"  → {len(wf_a['oos_trades'])} 筆樣本外交易")
+    if trades_a and len(trades_a) >= 5:
+        print(f"  [R4] Monte Carlo 模擬...")
+        mc_a = monte_carlo(trades_a)
+
     # 策略 B：趨勢跟蹤（多頭友善）
     print(f"  [策略B] 趨勢跟蹤...")
     signals_b, hold_b = generate_signals_trend(price_df)
     trades_b = calculate_trades(signals_b, is_us=is_us)
     print(f"  → {len(trades_b)} 筆交易")
+
+    wf_b = None
+    mc_b = None
+    if len(price_df) >= 200:
+        wf_b = walk_forward(price_df, generate_signals_trend, calculate_trades, is_us=is_us)
+    if trades_b and len(trades_b) >= 5:
+        mc_b = monte_carlo(trades_b)
 
     # 策略 C：長線佈局（逢低買、漲高賣）
     print(f"  [策略C] 長線佈局...")
@@ -569,12 +757,23 @@ def main():
     trades_c = calculate_trades(signals_c, is_us=is_us)
     print(f"  → {len(trades_c)} 筆交易")
 
+    wf_c = None
+    mc_c = None
+    if len(price_df) >= 300:
+        wf_c = walk_forward(price_df, generate_signals_value, calculate_trades,
+                            is_us=is_us, min_train=180)
+    if trades_c and len(trades_c) >= 5:
+        mc_c = monte_carlo(trades_c)
+
     print_report(stock_id, name, price_df, trades_a, hold_a, is_us=is_us,
-                 strategy_name="均線交叉 + RSI + 量能 + 停損 -8%（波段）")
+                 strategy_name="均線交叉 + RSI + 量能 + 停損 -8%（波段）",
+                 wf_result=wf_a, mc_result=mc_a)
     print_report(stock_id, name, price_df, trades_b, hold_b, is_us=is_us,
-                 strategy_name="趨勢跟蹤 — 20/60MA + 移動停利 -10%（順勢）")
+                 strategy_name="趨勢跟蹤 — 20/60MA + 移動停利 -10%（順勢）",
+                 wf_result=wf_b, mc_result=mc_b)
     print_report(stock_id, name, price_df, trades_c, hold_c, is_us=is_us,
-                 strategy_name="長線佈局 — 逢低買入 + 漲高出場 + 停利 -12%")
+                 strategy_name="長線佈局 — 逢低買入 + 漲高出場 + 停利 -12%",
+                 wf_result=wf_c, mc_result=mc_c)
 
 
 if __name__ == "__main__":

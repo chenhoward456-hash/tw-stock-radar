@@ -53,6 +53,7 @@ page = st.sidebar.radio("功能", [
     "📡 觀察清單掃描",
     "⚔ 股票 PK",
     "💼 持倉監控",
+    "📊 持倉分析",
     "🔥 題材趨勢",
     "📈 歷史回測",
     "📋 訊號追蹤",
@@ -97,6 +98,12 @@ if page == "🏠 今日焦點":
             st.success(f"✅ **總體環境良好** — 環境分 {macro_score}/10，放心操作")
         else:
             st.info(f"📊 **總體環境** — 環境分 {macro_score}/10，正常")
+
+        # [R4] 恐慌/貪婪指數
+        fg = _macro_data.get("fear_greed_index")
+        fg_label = _macro_data.get("fear_greed_label", "")
+        if fg is not None:
+            st.caption(f"恐慌/貪婪指數：**{fg}/100**（{fg_label}）")
 
         with st.expander("總體經濟細節"):
             for d in _macro_data["details"]:
@@ -455,14 +462,82 @@ elif page == "🔍 個股分析":
 - **7 分以上** = 條件好，可以考慮 ｜ **4 分以下** = 條件差，先不碰
             """)
 
-        # K 線圖
+        # [R4] Plotly 互動式 K 線圖
         if not price_df.empty:
-            chart_df = price_df.sort_values("date").tail(60).copy()
-            chart_df["date"] = pd.to_datetime(chart_df["date"])
-            chart_df["close"] = chart_df["close"].astype(float)
-            chart_df = chart_df.set_index("date")
-            st.markdown("### 近 60 日走勢")
-            st.line_chart(chart_df["close"])
+            try:
+                import plotly.graph_objects as go
+                from plotly.subplots import make_subplots
+
+                chart_df = price_df.sort_values("date").tail(120).copy()
+                chart_df["date"] = pd.to_datetime(chart_df["date"])
+                for col in ["open", "close", "max", "min"]:
+                    if col in chart_df.columns:
+                        chart_df[col] = chart_df[col].astype(float)
+
+                has_ohlc = all(c in chart_df.columns for c in ["open", "max", "min", "close"])
+
+                if has_ohlc:
+                    fig = make_subplots(
+                        rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.03,
+                        row_heights=[0.7, 0.3],
+                    )
+
+                    # K 線
+                    fig.add_trace(go.Candlestick(
+                        x=chart_df["date"],
+                        open=chart_df["open"], high=chart_df["max"],
+                        low=chart_df["min"], close=chart_df["close"],
+                        name="K線",
+                        increasing_line_color="#EF5350",  # 台股紅漲
+                        decreasing_line_color="#26A69A",
+                    ), row=1, col=1)
+
+                    # MA5 / MA20
+                    close = chart_df["close"]
+                    ma5 = close.rolling(5).mean()
+                    ma20 = close.rolling(20).mean()
+                    fig.add_trace(go.Scatter(
+                        x=chart_df["date"], y=ma5,
+                        name="MA5", line=dict(color="orange", width=1),
+                    ), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=chart_df["date"], y=ma20,
+                        name="MA20", line=dict(color="blue", width=1),
+                    ), row=1, col=1)
+
+                    # 成交量
+                    if "Trading_Volume" in chart_df.columns:
+                        colors = ["#EF5350" if c >= o else "#26A69A"
+                                  for c, o in zip(chart_df["close"], chart_df["open"])]
+                        fig.add_trace(go.Bar(
+                            x=chart_df["date"],
+                            y=chart_df["Trading_Volume"].astype(float),
+                            name="成交量", marker_color=colors, opacity=0.5,
+                        ), row=2, col=1)
+
+                    fig.update_layout(
+                        title=f"{stock_id} {name} — 近 120 日 K 線",
+                        xaxis_rangeslider_visible=False,
+                        height=500,
+                        showlegend=True,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    )
+                    fig.update_yaxes(title_text="價格", row=1, col=1)
+                    fig.update_yaxes(title_text="量", row=2, col=1)
+
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    chart_df = chart_df.set_index("date")
+                    st.markdown("### 近 120 日走勢")
+                    st.line_chart(chart_df["close"])
+            except ImportError:
+                chart_df = price_df.sort_values("date").tail(60).copy()
+                chart_df["date"] = pd.to_datetime(chart_df["date"])
+                chart_df["close"] = chart_df["close"].astype(float)
+                chart_df = chart_df.set_index("date")
+                st.markdown("### 近 60 日走勢")
+                st.line_chart(chart_df["close"])
 
         # 四面向
         st.markdown("### 四面向分析")
@@ -1433,3 +1508,164 @@ elif page == "⭐ 自訂追蹤":
                 if st.button("移除", key=f"rm_{item['stock_id']}"):
                     custom_watchlist.remove(item["stock_id"])
                     st.rerun()
+
+# ===== [R4] 持倉分析 =====
+elif page == "📊 持倉分析":
+    st.title("📊 持倉分析")
+    st.caption("持倉的風險分析、相關性矩陣、配置建議")
+
+    # 讀持倉
+    _pa_holdings = []
+    try:
+        _vars = {}
+        _hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+        with open(_hp, "r", encoding="utf-8") as f:
+            exec(f.read(), _vars)
+        _pa_holdings = _vars.get("HOLDINGS", [])
+    except Exception:
+        pass
+    if not _pa_holdings:
+        try:
+            import json as _json
+            raw = ""
+            if "HOLDINGS_JSON" in st.secrets:
+                raw = st.secrets["HOLDINGS_JSON"]
+            elif "HOLDINGS" in st.secrets and "json" in st.secrets["HOLDINGS"]:
+                raw = st.secrets["HOLDINGS"]["json"]
+            if raw:
+                _pa_holdings = _json.loads(raw)
+        except Exception:
+            pass
+
+    if not _pa_holdings:
+        st.warning("沒有持倉資料。請先到 holdings.py 或 Streamlit Secrets 設定持倉。")
+    else:
+        stock_ids = [h["stock_id"] for h in _pa_holdings]
+        st.markdown(f"**持有 {len(stock_ids)} 檔：** {', '.join(stock_ids)}")
+
+        with st.spinner("計算持倉分析..."):
+            # 1. 抓各持倉價格
+            price_dict = {}
+            returns_dict = {}
+            for sid in stock_ids:
+                try:
+                    pdf = market.fetch_stock_price(sid, days=120)
+                    if pdf is not None and not pdf.empty:
+                        pdf = pdf.sort_values("date").reset_index(drop=True)
+                        pdf["close"] = pdf["close"].astype(float)
+                        price_dict[sid] = pdf
+                        ret = pdf["close"].pct_change().dropna()
+                        returns_dict[sid] = ret.values[-60:] if len(ret) >= 60 else ret.values
+                except Exception:
+                    pass
+
+            # 2. 相關性矩陣
+            if len(returns_dict) >= 2:
+                st.markdown("### 相關性矩陣")
+                st.caption("數值越高，兩檔股票走勢越同步（分散度越低）")
+
+                # 對齊長度
+                min_len = min(len(v) for v in returns_dict.values())
+                aligned = {k: v[:min_len] for k, v in returns_dict.items()}
+                corr_df = pd.DataFrame(aligned).corr()
+
+                try:
+                    import plotly.express as px
+                    fig_corr = px.imshow(
+                        corr_df, text_auto=".2f",
+                        color_continuous_scale="RdYlGn_r",
+                        zmin=-1, zmax=1,
+                        title="持倉相關性矩陣",
+                    )
+                    fig_corr.update_layout(height=400)
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                except ImportError:
+                    st.dataframe(corr_df.style.format("{:.2f}"))
+
+                # 高相關警告
+                high_corr_pairs = []
+                cols = list(corr_df.columns)
+                for i in range(len(cols)):
+                    for j in range(i + 1, len(cols)):
+                        c = corr_df.iloc[i, j]
+                        if c > 0.7:
+                            high_corr_pairs.append((cols[i], cols[j], c))
+                if high_corr_pairs:
+                    st.warning("⚠ 高相關持倉（> 0.7）：")
+                    for a, b, c in sorted(high_corr_pairs, key=lambda x: -x[2]):
+                        st.caption(f"　{a} ↔ {b}：{c:.2f}（分散效果差）")
+
+            # 3. 持倉配置比例
+            st.markdown("### 配置比例")
+            position_values = {}
+            total_value = 0
+            for h in _pa_holdings:
+                sid = h["stock_id"]
+                qty = h.get("shares", 0)
+                if sid in price_dict and qty > 0:
+                    current_price = float(price_dict[sid]["close"].iloc[-1])
+                    val = current_price * qty
+                    position_values[sid] = val
+                    total_value += val
+
+            if total_value > 0:
+                pct_data = {k: round(v / total_value * 100, 1) for k, v in position_values.items()}
+
+                try:
+                    import plotly.express as px
+                    fig_pie = px.pie(
+                        names=list(pct_data.keys()),
+                        values=list(pct_data.values()),
+                        title="持倉佔比",
+                    )
+                    fig_pie.update_traces(textposition="inside", textinfo="label+percent")
+                    fig_pie.update_layout(height=400)
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                except ImportError:
+                    for sid, pct in sorted(pct_data.items(), key=lambda x: -x[1]):
+                        st.caption(f"　{sid}：{pct}%")
+
+                # 集中度警告
+                max_pct = max(pct_data.values()) if pct_data else 0
+                if max_pct > 30:
+                    st.error(f"🚨 最大單一持倉佔 {max_pct:.0f}%，建議不超過 30%")
+                elif max_pct > 20:
+                    st.warning(f"⚠ 最大單一持倉佔 {max_pct:.0f}%，偏高")
+
+                st.caption(f"持倉總市值：{total_value:,.0f} 元")
+
+            # 4. 波動率分析
+            st.markdown("### 個股波動率（年化）")
+            vol_data = {}
+            for sid, rets in returns_dict.items():
+                if len(rets) >= 10:
+                    daily_vol = np.std(rets)
+                    annual_vol = daily_vol * np.sqrt(252) * 100
+                    vol_data[sid] = round(annual_vol, 1)
+
+            if vol_data:
+                vol_df = pd.DataFrame({"年化波動率(%)": vol_data}).sort_values("年化波動率(%)", ascending=False)
+                st.bar_chart(vol_df)
+
+                high_vol = {k: v for k, v in vol_data.items() if v > 40}
+                if high_vol:
+                    st.warning(f"⚠ 高波動持倉（年化 > 40%）：{', '.join(f'{k}({v}%)' for k, v in high_vol.items())}")
+
+            # 5. Kelly 建議（如果有回測資料）
+            st.markdown("### Kelly Criterion 建議")
+            st.caption("基於歷史勝率和盈虧比的最佳倉位比例")
+            from portfolio import _kelly_fraction
+            for sid in stock_ids:
+                if sid in returns_dict and len(returns_dict[sid]) >= 20:
+                    rets = returns_dict[sid]
+                    wins = [r for r in rets if r > 0]
+                    losses = [r for r in rets if r < 0]
+                    if wins and losses:
+                        wr = len(wins) / len(rets)
+                        avg_w = np.mean(wins) * 100
+                        avg_l = abs(np.mean(losses)) * 100
+                        kelly = _kelly_fraction(wr, avg_w, avg_l)
+                        st.caption(
+                            f"　{sid}：勝率 {wr:.0%}　盈虧比 {avg_w/avg_l:.2f}　"
+                            f"→ Half-Kelly 建議 {kelly*100:.1f}%"
+                        )

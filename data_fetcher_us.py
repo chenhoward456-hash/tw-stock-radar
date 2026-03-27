@@ -327,6 +327,105 @@ def fetch_insider_and_margins(symbol):
     return result
 
 
+def fetch_financial_health(symbol):
+    """
+    [R4] 取得財務健康指標：自由現金流、負債比、利息保障倍數
+    回傳：{"fcf": float, "debt_to_equity": float, "interest_coverage": float,
+           "current_ratio": float, "score_adj": float, "details": list}
+    """
+    result = {"fcf": None, "debt_to_equity": None, "interest_coverage": None,
+              "current_ratio": None, "score_adj": 0, "details": []}
+    try:
+        t = _get_ticker(symbol)
+        info = t.info
+
+        # 自由現金流
+        fcf = info.get("freeCashflow", None)
+        if fcf is not None:
+            result["fcf"] = fcf
+            if fcf > 0:
+                # FCF yield = FCF / Market Cap
+                mcap = info.get("marketCap", 0) or 0
+                if mcap > 0:
+                    fcf_yield = (fcf / mcap) * 100
+                    if fcf_yield > 8:
+                        result["details"].append(f"✓ FCF Yield {fcf_yield:.1f}%（現金流充沛）")
+                        result["score_adj"] += 1
+                    elif fcf_yield > 4:
+                        result["details"].append(f"✓ FCF Yield {fcf_yield:.1f}%（健康）")
+                        result["score_adj"] += 0.5
+                    else:
+                        result["details"].append(f"— FCF Yield {fcf_yield:.1f}%")
+            else:
+                result["details"].append(f"⚠ 自由現金流為負（燒錢中）")
+                result["score_adj"] -= 1
+
+        # 負債股東權益比
+        de = info.get("debtToEquity", None)
+        if de is not None:
+            result["debt_to_equity"] = round(de, 1)
+            if de > 200:
+                result["details"].append(f"🚨 負債/權益比 {de:.0f}%（高槓桿風險）")
+                result["score_adj"] -= 1.5
+            elif de > 100:
+                result["details"].append(f"⚠ 負債/權益比 {de:.0f}%（偏高）")
+                result["score_adj"] -= 0.5
+            elif de < 30:
+                result["details"].append(f"✓ 負債/權益比 {de:.0f}%（財務穩健）")
+                result["score_adj"] += 0.5
+            else:
+                result["details"].append(f"— 負債/權益比 {de:.0f}%")
+
+        # 流動比率
+        cr = info.get("currentRatio", None)
+        if cr is not None:
+            result["current_ratio"] = round(cr, 2)
+            if cr < 1.0:
+                result["details"].append(f"⚠ 流動比率 {cr:.2f}（短期償債壓力）")
+                result["score_adj"] -= 0.5
+            elif cr > 2.0:
+                result["details"].append(f"✓ 流動比率 {cr:.2f}（短期財務安全）")
+                result["score_adj"] += 0.5
+
+        # 利息保障倍數（用 EBIT / Interest Expense 近似）
+        try:
+            # yfinance 的 financials 有 EBIT 和 Interest Expense
+            fin = t.financials
+            if fin is not None and not fin.empty:
+                ebit_row = None
+                interest_row = None
+                for idx in fin.index:
+                    idx_lower = str(idx).lower()
+                    if "ebit" in idx_lower and "ebitda" not in idx_lower:
+                        ebit_row = idx
+                    if "interest" in idx_lower and "expense" in idx_lower:
+                        interest_row = idx
+
+                if ebit_row and interest_row:
+                    ebit = float(fin.loc[ebit_row].iloc[0])
+                    interest = abs(float(fin.loc[interest_row].iloc[0]))
+                    if interest > 0:
+                        ic = ebit / interest
+                        result["interest_coverage"] = round(ic, 1)
+                        if ic < 2:
+                            result["details"].append(f"🚨 利息保障倍數 {ic:.1f}x（償債風險高）")
+                            result["score_adj"] -= 1
+                        elif ic < 5:
+                            result["details"].append(f"⚠ 利息保障倍數 {ic:.1f}x（尚可）")
+                        elif ic > 15:
+                            result["details"].append(f"✓ 利息保障倍數 {ic:.1f}x（極安全）")
+                            result["score_adj"] += 0.5
+                        else:
+                            result["details"].append(f"— 利息保障倍數 {ic:.1f}x")
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+
+    return result
+
+
 def is_us_stock(symbol):
     """判斷是不是美股代號（含 BRK-B 這類帶符號的）"""
     if not symbol:
