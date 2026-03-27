@@ -64,6 +64,16 @@ def _bollinger(prices, period=20, std_mult=2):
     return upper, middle, lower
 
 
+def _atr(high, low, close, period=14):
+    """計算 ATR（平均真實波幅），用於動態停損"""
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+
 def analyze(price_df):
     """
     技術面分析
@@ -255,8 +265,22 @@ def analyze(price_df):
     if pct_20d < -20:
         details.append("⚠ 中線跌幅已大，留意是否為趨勢破壞")
 
-    # 停損參考
-    details.append(f"📍 停損參考：20日均線 {ma20.iloc[-1]:.1f} 元")
+    # ===== ATR 動態停損（適應不同波動度的股票）=====
+    atr_series = _atr(high, low, close)
+    current_atr = atr_series.iloc[-1] if not np.isnan(atr_series.iloc[-1]) else 0
+    atr_pct = current_atr / current_price * 100 if current_price > 0 else 0
+
+    # 停損建議：2 倍 ATR，同時參考 20MA
+    atr_stop = current_price - 2 * current_atr if current_atr > 0 else 0
+    ma20_val = ma20.iloc[-1]
+    # 取兩者中較保守的（較高的價位）
+    stop_loss = max(atr_stop, ma20_val) if atr_stop > 0 else ma20_val
+    stop_loss_pct = (current_price - stop_loss) / current_price * 100 if current_price > 0 else 0
+
+    details.append(f"📍 ATR(14) = {current_atr:.1f}（日均波幅 {atr_pct:.1f}%）")
+    details.append(f"📍 停損參考：{stop_loss:.1f} 元（距現價 -{stop_loss_pct:.1f}%）")
+    if atr_stop > 0 and atr_stop != ma20_val:
+        details.append(f"  　ATR 停損 {atr_stop:.1f} / 20MA 停損 {ma20_val:.1f}（取較高者）")
 
     # ===== 結算 =====
     score = max(1.0, min(10.0, score))
@@ -274,5 +298,7 @@ def analyze(price_df):
     result["ma20"] = ma20.iloc[-1]
     result["ma60"] = ma60.iloc[-1]
     result["rsi"] = current_rsi
+    result["atr"] = current_atr
+    result["stop_loss"] = stop_loss
 
     return result

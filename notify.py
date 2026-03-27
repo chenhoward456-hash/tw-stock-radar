@@ -190,6 +190,22 @@ def format_message(results):
 
     lines = [f"投資雷達掃描 ({now})", ""]
 
+    # ===== 總體經濟環境（新增）=====
+    try:
+        import macro as _macro
+        _macro_data = _macro.analyze()
+        _macro_score = _macro_data["score"]
+        _macro_mult = _macro_data["risk_multiplier"]
+        if _macro_data["signal"] == "red":
+            lines.append(f"🚨 總體環境警報 — 環境分 {_macro_score}/10")
+            lines.append(f"  個股評分自動降級（×{_macro_mult}）")
+            lines.append("")
+        elif _macro_mult < 0.95:
+            lines.append(f"⚠ 總體環境偏弱 — 環境分 {_macro_score}/10（×{_macro_mult}）")
+            lines.append("")
+    except Exception:
+        pass
+
     # ===== 0050 多空燈號（最重要，放最上面）=====
     regime, regime_msg = check_0050_regime()
     if regime == "bear":

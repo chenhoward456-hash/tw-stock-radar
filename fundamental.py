@@ -212,7 +212,7 @@ def analyze(per_df, revenue_df, industry_category=""):
     if industry_group:
         details.append(f"— 產業：{industry_category}（{industry_group}類）")
 
-    # ===== 本益比 =====
+    # ===== 本益比（改進：產業基準 + 歷史中位數雙重比較）=====
     if not per_df.empty and "PER" in per_df.columns:
         pdf = per_df.sort_values("date").reset_index(drop=True)
         per_vals = pd.to_numeric(pdf["PER"], errors="coerce")
@@ -220,38 +220,51 @@ def analyze(per_df, revenue_df, industry_category=""):
 
         if not per_valid.empty:
             current_per = per_valid.iloc[-1]
+            # 動態基準：用自身歷史中位數作為主要參考
+            median_per = per_valid.median()
+            hist_ratio = current_per / median_per if median_per > 0 else 1
 
             if pe_range:
-                # 有產業基準 → 用產業標準評估
+                # 有產業基準 → 產業 + 歷史雙重比較
                 low, mid, high = pe_range
-                if current_per > high * 1.2:
-                    details.append(f"⚠ 本益比 {current_per:.1f}x，遠超{industry_group}類合理上限 {high}x（偏貴）")
+
+                # 主要看歷史相對位置（更貼近個股實際估值區間）
+                if hist_ratio > 1.5:
+                    details.append(f"⚠ 本益比 {current_per:.1f}x，遠高於自身中位數 {median_per:.1f}x（偏貴）")
                     score -= 2
-                elif current_per > high:
-                    details.append(f"⚠ 本益比 {current_per:.1f}x，高於{industry_group}類合理範圍 {low}-{high}x（稍貴）")
+                elif hist_ratio > 1.2:
+                    details.append(f"⚠ 本益比 {current_per:.1f}x，高於自身中位數 {median_per:.1f}x（稍貴）")
                     score -= 1
-                elif current_per < low:
-                    details.append(f"✓ 本益比 {current_per:.1f}x，低於{industry_group}類常見範圍 {low}-{high}x（便宜）")
+                elif hist_ratio < 0.7:
+                    details.append(f"✓ 本益比 {current_per:.1f}x，遠低於自身中位數 {median_per:.1f}x（很便宜）")
                     score += 2
-                elif current_per < mid:
-                    details.append(f"✓ 本益比 {current_per:.1f}x，在{industry_group}類合理偏低範圍（{low}-{high}x）")
+                elif hist_ratio < 0.85:
+                    details.append(f"✓ 本益比 {current_per:.1f}x，低於自身中位數 {median_per:.1f}x（偏便宜）")
                     score += 1
                 else:
-                    details.append(f"— 本益比 {current_per:.1f}x，在{industry_group}類合理範圍（{low}-{high}x）")
+                    details.append(f"— 本益比 {current_per:.1f}x，接近自身中位數 {median_per:.1f}x（合理）")
+
+                # 額外參考產業範圍（輔助判斷）
+                if current_per > high * 1.3:
+                    details.append(f"  ⚠ 也遠超{industry_group}類合理上限 {high}x")
+                    score -= 0.5
+                elif current_per < low * 0.8:
+                    details.append(f"  ✓ 也低於{industry_group}類下限 {low}x")
+                    score += 0.5
+                else:
+                    details.append(f"  — 產業參考範圍：{low}-{high}x")
             else:
-                # 無產業基準 → 跟自己的歷史比
-                median_per = per_valid.median()
-                ratio = current_per / median_per if median_per > 0 else 1
-                if ratio > 1.5:
+                # 無產業基準 → 純粹跟自己的歷史比
+                if hist_ratio > 1.5:
                     details.append(f"⚠ 本益比 {current_per:.1f}x，遠高於一年中位數 {median_per:.1f}x（偏貴）")
                     score -= 2
-                elif ratio > 1.2:
+                elif hist_ratio > 1.2:
                     details.append(f"⚠ 本益比 {current_per:.1f}x，高於中位數 {median_per:.1f}x（稍貴）")
                     score -= 1
-                elif ratio < 0.8:
+                elif hist_ratio < 0.7:
                     details.append(f"✓ 本益比 {current_per:.1f}x，低於中位數 {median_per:.1f}x（便宜）")
                     score += 2
-                elif ratio < 0.9:
+                elif hist_ratio < 0.85:
                     details.append(f"✓ 本益比 {current_per:.1f}x，略低於中位數 {median_per:.1f}x")
                     score += 1
                 else:

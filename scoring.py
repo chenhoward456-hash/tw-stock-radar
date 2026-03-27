@@ -1,6 +1,12 @@
 """
 加權評分模組
 根據操作策略（短線/中長線）調整各面向權重
+
+改進項目：
+1. 安全閥只對基本面+籌碼生效，技術面不再觸發封頂（避免錯殺基本面好的股票）
+2. 美股法人權重歸零（yfinance 資料不可靠，0% 比 5% 噪音好）
+3. 新增 macro_multiplier 參數：總體經濟環境差時自動降級
+4. 所有策略都能受益於 valuation 分數（非僅 longterm）
 """
 
 # 策略權重設定
@@ -40,22 +46,25 @@ STRATEGIES = {
 }
 
 
-def weighted_score(tech_score, fund_score, inst_score, news_score, strategy="balanced", is_us=False):
+def weighted_score(tech_score, fund_score, inst_score, news_score,
+                   strategy="balanced", is_us=False, macro_multiplier=1.0):
     """
     根據策略計算加權綜合分數
-    is_us=True 時自動降低籌碼面權重（美股無真實法人買賣超資料）
+
+    參數：
+    - is_us: True 時美股法人權重歸零
+    - macro_multiplier: 0.7-1.0，由 macro.analyze() 提供
     回傳：(加權分數, 策略資訊 dict)
     """
     config = STRATEGIES.get(strategy, STRATEGIES["balanced"])
     w = dict(config["weights"])  # 複製一份，避免改到原始設定
 
     if is_us:
-        # 美股籌碼資料不可靠 → 把籌碼權重分給技術和基本面
-        inst_w = w["inst"]
-        w["inst"] = 0.05  # 保留極小權重
-        bonus = inst_w - 0.05
-        w["tech"] += bonus * 0.5
-        w["fund"] += bonus * 0.5
+        # 美股籌碼資料不可靠 → 權重歸零，分配給基本面和消息面
+        inst_bonus = w["inst"]
+        w["inst"] = 0.0
+        w["fund"] += inst_bonus * 0.6
+        w["news"] += inst_bonus * 0.4
 
     score = (
         tech_score * w["tech"]
@@ -64,11 +73,22 @@ def weighted_score(tech_score, fund_score, inst_score, news_score, strategy="bal
         + news_score * w["news"]
     )
 
-    # 安全閘門：任何面向低於 3 分 → 總分封頂 6 分（防止假陽性）
-    worst = min(tech_score, fund_score, inst_score)
-    if worst <= 2:
+    # === 安全閘門（改進版）===
+    # 只看基本面和籌碼面，技術面不參與封頂判斷
+    # 原因：技術面經常在好股票回檔時給低分，導致錯殺
+    core_worst = min(fund_score, inst_score) if w["inst"] > 0 else fund_score
+
+    if core_worst <= 2:
         score = min(score, 5.0)
-    elif worst <= 3:
+    elif core_worst <= 3:
         score = min(score, 6.0)
+
+    # 新聞面極差也要注意（可能有重大利空）
+    if news_score <= 2:
+        score = min(score, 5.5)
+
+    # === 總體經濟調整 ===
+    if macro_multiplier < 1.0:
+        score = score * macro_multiplier
 
     return round(score, 1), config

@@ -24,6 +24,7 @@ import portfolio
 import tracker
 import streak
 import sector_rotation
+import macro
 from scoring import STRATEGIES, weighted_score
 from watchlist import WATCHLIST
 
@@ -79,7 +80,31 @@ if page == "🏠 今日焦點":
     st.title("🏠 今日焦點")
     st.caption("打開就知道今天該關注什麼 — 不用看 145 檔，系統幫你篩好了")
 
-    # ===== 0050 多空燈號（最重要，放最上面）=====
+    # ===== 總體經濟環境（新增）=====
+    _macro_data = None
+    _macro_multiplier = 1.0
+    try:
+        _macro_data = macro.analyze()
+        _macro_multiplier = _macro_data["risk_multiplier"]
+        macro_signal = _macro_data["signal"]
+        macro_score = _macro_data["score"]
+
+        if macro_signal == "red":
+            st.error(f"🚨 **總體經濟警報** — 環境分 {macro_score}/10，個股評分自動降級（×{_macro_multiplier}）")
+        elif macro_signal == "yellow" and _macro_multiplier < 0.95:
+            st.warning(f"⚠ **總體環境偏弱** — 環境分 {macro_score}/10，個股評分微調（×{_macro_multiplier}）")
+        elif macro_signal == "green":
+            st.success(f"✅ **總體環境良好** — 環境分 {macro_score}/10，放心操作")
+        else:
+            st.info(f"📊 **總體環境** — 環境分 {macro_score}/10，正常")
+
+        with st.expander("總體經濟細節"):
+            for d in _macro_data["details"]:
+                st.caption(d)
+    except Exception:
+        pass
+
+    # ===== 0050 多空燈號 =====
     try:
         _0050_price = market.fetch_stock_price("0050", days=150)
         if not _0050_price.empty:
@@ -366,9 +391,17 @@ elif page == "🔍 個股分析":
                 fund = fundamental.analyze(per_df, rev_df, ind)
             inst = institutional.analyze(inst_df)
 
+        # 取得總體經濟環境（快取避免重複呼叫）
+        try:
+            if '_macro_data' not in dir() or _macro_data is None:
+                _macro_data = macro.analyze()
+                _macro_multiplier = _macro_data["risk_multiplier"]
+        except Exception:
+            _macro_multiplier = 1.0
+
         avg, strategy_info = weighted_score(
             tech["score"], fund["score"], inst["score"], news_result["score"], strategy_key,
-            is_us=is_us,
+            is_us=is_us, macro_multiplier=_macro_multiplier,
         )
         signal = overall_signal(avg)
 
@@ -378,6 +411,8 @@ elif page == "🔍 個股分析":
 
         # 評分區 — 一目了然的結論
         st.markdown(f"## {SIGNAL_EMOJI[signal]} {avg}/10")
+        if _macro_multiplier < 0.95:
+            st.caption(f"⚠ 總體環境偏差，評分已乘以 {_macro_multiplier}（原始 {round(avg / _macro_multiplier, 1)}）")
 
         if avg >= 7:
             st.success("各面向條件良好，可以考慮開始建倉（先買一部分就好）。")
@@ -501,9 +536,12 @@ elif page == "🔍 個股分析":
         for c in conclusions:
             st.markdown(c)
 
-        # 資金配置
+        # 資金配置（改進：傳入 ATR 停損 + 相關性資訊）
         if budget > 0 and "current_price" in tech:
-            suggestion = portfolio.suggest(avg, tech["current_price"], budget)
+            suggestion = portfolio.suggest(
+                avg, tech["current_price"], budget,
+                atr=tech.get("atr"),
+            )
             st.markdown("### 💰 資金配置建議")
             if suggestion:
                 c1, c2, c3 = st.columns(3)
@@ -516,6 +554,18 @@ elif page == "🔍 個股分析":
                         st.metric("建議買入", f"{suggestion['odd_shares']} 股（零股）")
                 with c3:
                     st.metric("投入金額", f"{suggestion['amount']:,.0f} 元")
+
+                # 停損資訊
+                _stop = tech.get("stop_loss", tech.get("ma20"))
+                if _stop:
+                    _stop_pct = (tech["current_price"] - _stop) / tech["current_price"] * 100
+                    st.caption(f"📍 建議停損：{_stop:.0f} 元（距現價 -{_stop_pct:.1f}%，ATR 動態計算）")
+
+                # 相關性 / 集中度警告
+                if suggestion.get("correlation_warning"):
+                    st.warning(suggestion["correlation_warning"])
+                if suggestion.get("position_warning"):
+                    st.warning(suggestion["position_warning"])
             else:
                 st.info("目前評分偏低，不建議進場配置。")
 
@@ -539,6 +589,13 @@ elif page == "📡 觀察清單掃描":
         progress = st.progress(0, text="載入中...")
         results = []
 
+        # 掃描時取得一次總體經濟環境
+        try:
+            _scan_macro = macro.analyze()
+            _scan_macro_mult = _scan_macro["risk_multiplier"]
+        except Exception:
+            _scan_macro_mult = 1.0
+
         def _scan_one(stock_id):
             """單一股票掃描（在線程中執行）"""
             sname = names.get(stock_id, stock_id)
@@ -560,6 +617,7 @@ elif page == "📡 觀察清單掃描":
             avg, _ = weighted_score(
                 tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key,
                 is_us=market.is_us(stock_id),
+                macro_multiplier=_scan_macro_mult,
             )
             signal = overall_signal(avg)
 
@@ -673,8 +731,12 @@ elif page == "⚔ 股票 PK":
             else:
                 f = fundamental.analyze(per_df, rev_df, ind)
             ins = institutional.analyze(inst_df)
+            try:
+                _pk_macro_mult = macro.analyze()["risk_multiplier"]
+            except Exception:
+                _pk_macro_mult = 1.0
             avg, _ = weighted_score(t["score"], f["score"], ins["score"], 5.0, strategy_key,
-                                   is_us=market.is_us(sid))
+                                   is_us=market.is_us(sid), macro_multiplier=_pk_macro_mult)
             return nm, t["score"], f["score"], ins["score"], avg
 
         with st.spinner("分析中..."):
@@ -1293,9 +1355,14 @@ elif page == "⭐ 自訂追蹤":
                             fund = fundamental.analyze(per_df, rev_df, ind)
                         inst_result = institutional.analyze(inst_df)
 
+                        try:
+                            _cw_macro_mult = macro.analyze()["risk_multiplier"]
+                        except Exception:
+                            _cw_macro_mult = 1.0
                         avg, _ = weighted_score(
                             tech["score"], fund["score"], inst_result["score"], 5.0, strategy_key,
                             is_us=market.is_us(sid),
+                            macro_multiplier=_cw_macro_mult,
                         )
                         signal = overall_signal(avg)
                         emoji = SIGNAL_EMOJI[signal]

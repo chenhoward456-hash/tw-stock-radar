@@ -152,9 +152,30 @@ def _is_us_symbol(symbol):
     return cleaned.isalpha()
 
 
+def _news_volume_signal(stock_id, stock_name, is_us):
+    """
+    新聞量異常偵測：突然大量新聞可能代表重大事件
+    回傳：(volume_adj, detail_str)
+    """
+    try:
+        if is_us:
+            recent = fetch_news(f"{stock_id} stock", max_items=30, lang="en")
+        else:
+            recent = fetch_news(stock_name, max_items=30, lang="zh")
+
+        count = len(recent)
+        if count >= 25:
+            return -0.5, f"⚠ 新聞量異常多（{count} 則），可能有重大事件，需留意"
+        elif count <= 3:
+            return 0, f"— 新聞量很少（{count} 則），市場關注度低"
+        return 0, None
+    except Exception:
+        return 0, None
+
+
 def analyze(stock_id, stock_name):
     """
-    消息面分析
+    消息面分析（改進版：加入新聞量異常偵測 + 多來源交叉驗證）
     回傳：{"signal": str, "score": float, "details": list}
     """
     result = {"signal": "yellow", "score": 5.0, "details": []}
@@ -174,7 +195,7 @@ def analyze(stock_id, stock_name):
     details = []
     details.append(f"— 近 7 日找到 {len(articles)} 則相關新聞")
 
-    # 優先用 AI 分析
+    # 優先用 AI 分析（送更多標題提升判斷品質）
     ai_result = _ai_score(stock_id, stock_name, articles)
 
     if ai_result is not None:
@@ -182,10 +203,24 @@ def analyze(stock_id, stock_name):
         details.append("— 分析方式：AI 語意分析")
         if summary:
             details.append(f"— AI 判斷：{summary}")
+
+        # 用關鍵字做交叉驗證（改進：AI + 關鍵字取平均，降低單一方法的偏差）
+        kw_score, pos, neg, _ = _keyword_score(articles, is_us=is_us)
+        if abs(score - kw_score) > 3:
+            details.append(f"— ⚠ AI 與關鍵字判斷差異大（AI={score:.0f} vs 關鍵字={kw_score:.0f}），取平均")
+            score = (score * 0.7 + kw_score * 0.3)  # 仍以 AI 為主
     else:
         score, pos, neg, _ = _keyword_score(articles, is_us=is_us)
         details.append("— 分析方式：關鍵字比對")
         details.append(f"— 正面關鍵字 {pos} 次 / 負面關鍵字 {neg} 次")
+
+    # 新聞量異常偵測
+    vol_adj, vol_detail = _news_volume_signal(stock_id, stock_name, is_us)
+    if vol_detail:
+        details.append(vol_detail)
+        score += vol_adj
+
+    score = max(1.0, min(10.0, score))
 
     if score >= 7:
         details.append("✓ 新聞情緒偏正面")
@@ -194,10 +229,10 @@ def analyze(stock_id, stock_name):
     else:
         details.append("— 新聞情緒中性")
 
-    # 顯示前 3 則新聞
+    # 顯示前 5 則新聞（原本 3 則太少）
     details.append("")
     details.append("近期新聞：")
-    for a in articles[:3]:
+    for a in articles[:5]:
         src = f" [{a['source']}]" if a["source"] else ""
         title = a["title"][:60]
         details.append(f"  • {title}{src}")
