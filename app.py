@@ -6,6 +6,16 @@
 import sys
 import os
 import time
+import logging
+
+# Minimal logging setup - data fetching warnings go to file so silent failures are visible
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "radar.log"), encoding="utf-8"),
+    ],
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -15,6 +25,27 @@ import numpy as np
 
 from config import TOTAL_BUDGET
 import market
+
+# === Bug fix: TOTAL_BUDGET fallback ===
+# If TOTAL_BUDGET is 0 (user hasn't set it), estimate from holdings
+def _get_effective_budget():
+    """Get budget: use TOTAL_BUDGET if set, otherwise estimate from holdings."""
+    if TOTAL_BUDGET > 0:
+        return TOTAL_BUDGET
+    # Fallback: sum of holdings market value (buy_price * shares)
+    try:
+        _vars = {}
+        _hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+        with open(_hp, "r", encoding="utf-8") as f:
+            exec(f.read(), _vars)
+        _h = _vars.get("HOLDINGS", [])
+        if _h:
+            return int(sum(h["buy_price"] * h["shares"] for h in _h))
+    except Exception:
+        pass
+    return 0
+
+_EFFECTIVE_BUDGET = _get_effective_budget()
 import technical
 import fundamental
 import valuation
@@ -387,7 +418,10 @@ elif page == "🔍 個股分析":
     with col1:
         stock_id = st.text_input("股票代號", value="2330", placeholder="臺股：2330 ｜ 美股：TSLA, AAPL, NVDA")
     with col2:
-        budget = st.number_input("投資預算（選填）", value=TOTAL_BUDGET, step=100000, format="%d")
+        budget = st.number_input("投資預算（選填）", value=_EFFECTIVE_BUDGET, step=100000, format="%d")
+
+    if TOTAL_BUDGET == 0 and _EFFECTIVE_BUDGET > 0:
+        st.caption(f"💡 TOTAL_BUDGET 未設定，暫用持倉成本估算（{_EFFECTIVE_BUDGET:,} 元）。建議到 .env 設定 TOTAL_BUDGET。")
 
     if st.button("開始分析", type="primary", use_container_width=True):
         stock_id = stock_id.strip().upper()
@@ -786,11 +820,25 @@ elif page == "📡 觀察清單掃描":
             }
 
         done_count = 0
+        scan_start_time = time.time()
         with ThreadPoolExecutor(max_workers=5) as pool:
             futures = {pool.submit(_scan_one, sid): sid for sid in all_stocks}
             for future in as_completed(futures):
                 done_count += 1
-                progress.progress(done_count / total, text=f"已完成 {done_count}/{total}...")
+                # Estimate remaining time based on average time per stock so far
+                elapsed = time.time() - scan_start_time
+                avg_per_stock = elapsed / done_count
+                remaining = int(avg_per_stock * (total - done_count))
+                if remaining > 60:
+                    eta_text = f"，預估剩餘 {remaining // 60} 分 {remaining % 60} 秒"
+                elif remaining > 0:
+                    eta_text = f"，預估剩餘 {remaining} 秒"
+                else:
+                    eta_text = "，即將完成"
+                progress.progress(
+                    done_count / total,
+                    text=f"已完成 {done_count}/{total}{eta_text}",
+                )
                 try:
                     results.append(future.result())
                 except Exception:
@@ -1054,10 +1102,11 @@ elif page == "💼 持倉監控":
 
                 # ===== [R5] 整體資金回撤檢查 =====
                 import risk_management as _rm
+                _dd_budget = _EFFECTIVE_BUDGET if _EFFECTIVE_BUDGET > 0 else total_cost
                 _dd = _rm.check_portfolio_drawdown(
                     [{"buy_price": r["buy_price"], "current_price": r["current_price"],
                       "shares": r["shares"]} for r in results],
-                    TOTAL_BUDGET,
+                    _dd_budget,
                     drawdown_threshold=0.15,
                 )
                 if _dd["risk_level"] == "critical":
@@ -1068,7 +1117,7 @@ elif page == "💼 持倉監控":
                     st.info(_dd["action"])
                 st.caption(
                     f"持倉成本 {_dd['total_cost']:,.0f} 元　"
-                    f"回撤上限 {_dd['threshold_pct']:.0f}%（{TOTAL_BUDGET * _dd['threshold_pct'] / 100:,.0f} 元）"
+                    f"回撤上限 {_dd['threshold_pct']:.0f}%（{_dd_budget * _dd['threshold_pct'] / 100:,.0f} 元）"
                 )
 
                 # 各持倉狀況
@@ -1148,7 +1197,8 @@ elif page == "💼 持倉監控":
                             _metrics = _rm.get_position_risk_metrics(
                                 {"buy_price": _buy_p, "shares": r["shares"],
                                  "current_price": r["current_price"], "stop_loss": _eff_stop},
-                                TOTAL_BUDGET, trailing_stop_price=_trail["trailing_stop"],
+                                _EFFECTIVE_BUDGET if _EFFECTIVE_BUDGET > 0 else total_cost,
+                                trailing_stop_price=_trail["trailing_stop"],
                             )
                             st.caption(
                                 f"倉位佔總資金 **{_metrics['position_pct']:.1f}%**　"

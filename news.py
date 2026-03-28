@@ -3,10 +3,13 @@
 優先使用 Claude AI 分析新聞（需要 ANTHROPIC_API_KEY）
 沒有 API Key 時退回關鍵字比對
 """
+import logging
 import re
 import xml.etree.ElementTree as ET
 import requests
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 # ===== 關鍵字（AI 不可用時的備案）=====
 POSITIVE = [
@@ -23,7 +26,7 @@ NEGATIVE = [
 ]
 
 
-def fetch_news(query, max_items=20, lang="zh"):
+def _fetch_google_news(query, max_items=20, lang="zh"):
     """從 Google News RSS 抓取新聞標題"""
     if lang == "en":
         url = (
@@ -52,8 +55,54 @@ def fetch_news(query, max_items=20, lang="zh"):
             if len(items) >= max_items:
                 break
         return items
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Google News RSS failed for '{query}': {e}")
         return []
+
+
+def _fetch_yahoo_news(query, max_items=20):
+    """從 Yahoo News RSS 抓取新聞標題（Google 結果不足時的備案）"""
+    url = f"https://news.yahoo.com/rss/search?p={quote(query)}"
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+
+        items = []
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            source_el = item.find("source")
+            if title_el is not None and title_el.text:
+                items.append({
+                    "title": title_el.text,
+                    "source": (source_el.text if source_el is not None else "Yahoo"),
+                })
+            if len(items) >= max_items:
+                break
+        return items
+    except Exception as e:
+        logger.warning(f"Yahoo News RSS failed for '{query}': {e}")
+        return []
+
+
+def fetch_news(query, max_items=20, lang="zh"):
+    """從 Google News RSS 抓取新聞標題，結果不足 5 則時嘗試 Yahoo News 補充"""
+    items = _fetch_google_news(query, max_items, lang)
+
+    # 如果 Google 結果不足 5 則，嘗試 Yahoo News 補充
+    if len(items) < 5:
+        yahoo_items = _fetch_yahoo_news(query, max_items - len(items))
+        if yahoo_items:
+            # 用 set 去重（避免同一則新聞重複）
+            existing_titles = {a["title"].lower() for a in items}
+            for ya in yahoo_items:
+                if ya["title"].lower() not in existing_titles:
+                    items.append(ya)
+                    existing_titles.add(ya["title"].lower())
+                if len(items) >= max_items:
+                    break
+
+    return items
 
 
 POSITIVE_EN = [
@@ -140,7 +189,8 @@ def _ai_score(stock_id, stock_name, articles):
 
     except ImportError:
         return None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"AI news scoring failed for {stock_id}: {e}")
         return None
 
 
@@ -169,7 +219,8 @@ def _news_volume_signal(stock_id, stock_name, is_us):
         elif count <= 3:
             return 0, f"— 新聞量很少（{count} 則），市場關注度低"
         return 0, None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"News volume signal failed for {stock_id}: {e}")
         return 0, None
 
 

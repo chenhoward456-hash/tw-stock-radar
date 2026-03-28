@@ -2,10 +2,13 @@
 美股資料抓取模組
 資料來源：yfinance（Yahoo Finance）
 """
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import cache
+
+logger = logging.getLogger(__name__)
 
 
 import threading
@@ -27,7 +30,8 @@ def fetch_stock_name(symbol):
             t = _get_ticker(symbol)
             info = t.info
             return info.get("shortName", info.get("longName", symbol))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"fetch_stock_name failed for {symbol}: {e}")
             return symbol
     return cache.cached_call("us_name", (symbol,), cache.TTL_STATIC, _do)
 
@@ -39,7 +43,8 @@ def fetch_stock_industry(symbol):
             t = _get_ticker(symbol)
             info = t.info
             return info.get("sector", "")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"fetch_stock_industry failed for {symbol}: {e}")
             return ""
     return cache.cached_call("us_industry", (symbol,), cache.TTL_STATIC, _do)
 
@@ -66,7 +71,8 @@ def fetch_stock_price(symbol, days=150):
         })
         df["date"] = df["date"].dt.strftime("%Y-%m-%d")
         return df[["date", "open", "max", "min", "close", "Trading_Volume"]]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_stock_price failed for {symbol}: {e}")
         return pd.DataFrame()
 
 
@@ -95,7 +101,8 @@ def fetch_per_pbr(symbol):
                 "dividend_yield": dy,
             }])
         return pd.DataFrame()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_per_pbr failed for {symbol}: {e}")
         return pd.DataFrame()
 
 
@@ -192,7 +199,8 @@ def fetch_monthly_revenue(symbol):
                 })
 
         return pd.DataFrame(rows).sort_values("date")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_monthly_revenue failed for {symbol}: {e}")
         return pd.DataFrame()
 
 
@@ -225,7 +233,8 @@ def fetch_institutional(symbol):
                 {"date": today, "name": "Foreign_Investor", "buy": max(net, 0), "sell": max(-net, 0)},
             ])
         return pd.DataFrame()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_institutional failed for {symbol}: {e}")
         return pd.DataFrame()
 
 

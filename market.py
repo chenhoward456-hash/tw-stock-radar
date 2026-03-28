@@ -2,10 +2,13 @@
 市場統一入口
 自動判斷臺股或美股，呼叫對應的資料來源
 """
+import logging
 import data_fetcher as tw
 import data_fetcher_us as us
 from config import FINMIND_TOKEN
 from watchlist import WATCHLIST
+
+logger = logging.getLogger(__name__)
 
 TOKEN = FINMIND_TOKEN or None
 
@@ -135,7 +138,8 @@ def fetch_stock_price_adjusted(symbol, days=500):
             df["date"] = df["date"].dt.tz_localize(None)
         df["date"] = df["date"].dt.strftime("%Y-%m-%d")
         return df[["date", "open", "max", "min", "close", "Trading_Volume"]]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_stock_price_adjusted failed for {symbol}, falling back: {e}")
         return fetch_stock_price(symbol, days)
 
 

@@ -2,10 +2,13 @@
 臺股資料抓取模組
 資料來源：FinMind API
 """
+import logging
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import cache
+
+logger = logging.getLogger(__name__)
 
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
 
@@ -33,27 +36,30 @@ def _fetch(dataset, stock_id=None, start_date=None, end_date=None, token=None, m
             if data.get("status") != 200:
                 msg = data.get("msg", "未知錯誤")
                 if "token" in msg.lower() or "limit" in msg.lower():
-                    pass  # token 問題不重試
+                    logger.warning(f"FinMind token/limit error for {dataset}/{stock_id}: {msg}")
                     return pd.DataFrame()
                 # 其他錯誤可以重試
                 if attempt < max_retries - 1:
                     _time.sleep(2 ** attempt)
                     continue
+                logger.warning(f"FinMind API error for {dataset}/{stock_id}: {msg}")
                 return pd.DataFrame()
 
             return pd.DataFrame(data.get("data", []))
 
         except requests.exceptions.Timeout:
+            logger.warning(f"FinMind timeout for {dataset}/{stock_id} (attempt {attempt+1}/{max_retries})")
             if attempt < max_retries - 1:
                 _time.sleep(2 ** attempt)
                 continue
-        return pd.DataFrame()
-    except requests.exceptions.ConnectionError:
-        print("  ⚠ 無法連線到 FinMind，請檢查網路")
-        return pd.DataFrame()
-    except Exception as e:
-        print(f"  ⚠ 資料抓取失敗：{e}")
-        return pd.DataFrame()
+            return pd.DataFrame()
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"FinMind connection error for {dataset}/{stock_id}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.warning(f"FinMind fetch failed for {dataset}/{stock_id}: {e}")
+            return pd.DataFrame()
+    return pd.DataFrame()
 
 
 _stock_info_cache = None
@@ -78,8 +84,8 @@ def fetch_stock_name(stock_id, token=None):
             match = df[df["stock_id"] == str(stock_id)]
             if not match.empty:
                 return match.iloc[0].get("stock_name", str(stock_id))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"fetch_stock_name failed for {stock_id}: {e}")
     return str(stock_id)
 
 
@@ -91,8 +97,8 @@ def fetch_stock_industry(stock_id, token=None):
             match = df[df["stock_id"] == str(stock_id)]
             if not match.empty:
                 return match.iloc[0].get("industry_category", "")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"fetch_stock_industry failed for {stock_id}: {e}")
     return ""
 
 
@@ -110,7 +116,8 @@ def fetch_stock_names(stock_ids, token=None):
                     result[str(sid)] = str(sid)
         else:
             result = {str(sid): str(sid) for sid in stock_ids}
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_stock_names failed: {e}")
         result = {str(sid): str(sid) for sid in stock_ids}
     return result
 
