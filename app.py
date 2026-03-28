@@ -68,7 +68,8 @@ SIGNAL_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
 
 def overall_signal(score):
-    if score >= 7:
+    green_th = st.session_state.get("green_threshold", 7.0)
+    if score >= green_th:
         return "green"
     elif score >= 4:
         return "yellow"
@@ -102,6 +103,35 @@ strategy_key = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
+
+# ===== 進階設定 =====
+with st.sidebar.expander("⚙ 進階設定"):
+    if "atr_multiplier" not in st.session_state:
+        st.session_state.atr_multiplier = 2.0
+    if "drawdown_threshold" not in st.session_state:
+        st.session_state.drawdown_threshold = 15
+    if "green_threshold" not in st.session_state:
+        st.session_state.green_threshold = 7.0
+
+    st.session_state.atr_multiplier = st.slider(
+        "ATR 倍數（停損距離）",
+        min_value=1.0, max_value=4.0, step=0.5,
+        value=st.session_state.atr_multiplier,
+        help="越大 = 停損越寬鬆，預設 2.0",
+    )
+    st.session_state.drawdown_threshold = st.slider(
+        "回撤警報門檻（%）",
+        min_value=5, max_value=30, step=5,
+        value=st.session_state.drawdown_threshold,
+        help="持倉虧損超過此比例會警報，預設 15%",
+    )
+    st.session_state.green_threshold = st.slider(
+        "綠燈門檻（分）",
+        min_value=5.0, max_value=9.0, step=0.5,
+        value=st.session_state.green_threshold,
+        help="綜合分數 >= 此值 = 綠燈，預設 7",
+    )
+
 from config import FINMIND_TOKEN
 if not FINMIND_TOKEN:
     st.sidebar.warning("台股資料限速中（未設 FinMind Token）。到 config.py 填入免費 Token 可提升 10 倍速度。")
@@ -198,6 +228,35 @@ if page == "🏠 今日焦點":
     if _holdings:
         st.markdown("### 持倉狀況")
         from monitor import check_holding
+
+        # 總損益摘要
+        _total_invested = 0
+        _total_current = 0
+        for _h_summary in _holdings:
+            _cost = _h_summary["buy_price"] * _h_summary["shares"]
+            _total_invested += _cost
+            try:
+                _cur_price = market.fetch_stock_price(_h_summary["stock_id"], days=5)
+                if _cur_price is not None and not _cur_price.empty:
+                    _cur_val = float(_cur_price["close"].iloc[-1]) * _h_summary["shares"]
+                    _total_current += _cur_val
+                else:
+                    _total_current += _cost  # 抓不到就用成本
+            except Exception:
+                _total_current += _cost
+
+        _total_pnl = _total_current - _total_invested
+        _total_pnl_pct = (_total_current / _total_invested - 1) * 100 if _total_invested > 0 else 0
+
+        _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+        with _sc1:
+            st.metric("投入成本", f"{_total_invested:,.0f}")
+        with _sc2:
+            st.metric("目前市值", f"{_total_current:,.0f}")
+        with _sc3:
+            st.metric("總損益", f"{_total_pnl:+,.0f}", f"{_total_pnl_pct:+.1f}%")
+        with _sc4:
+            st.metric("持倉數", f"{len(_holdings)} 檔")
 
         # 每檔持倉根據類型顯示不同評分
         for h in _holdings:
@@ -849,16 +908,17 @@ elif page == "📡 觀察清單掃描":
         if results:
             df = pd.DataFrame(results).sort_values("短線", ascending=False)
 
+            _green_th = st.session_state.get("green_threshold", 7.0)
             # 短線綠燈
-            greens = df[df["短線"] >= 7]
-            watch = df[(df["短線"] >= 6) & (df["短線"] < 7)]
+            greens = df[df["短線"] >= _green_th]
+            watch = df[(df["短線"] >= _green_th - 1) & (df["短線"] < _green_th)]
             reds = df[df["短線"] < 4]
 
             # 長線佈局機會（短線低但長線高 = 逢低佈局）
-            long_opps = df[(df["長線"] >= 7) & (df["短線"] < 7)].sort_values("長線", ascending=False)
+            long_opps = df[(df["長線"] >= _green_th) & (df["短線"] < _green_th)].sort_values("長線", ascending=False)
 
             # 短線綠燈但長線低 = 矛盾警告
-            contradictions = df[(df["短線"] >= 7) & (df["長線"] <= 5)]
+            contradictions = df[(df["短線"] >= _green_th) & (df["長線"] <= 5)]
 
             if not greens.empty:
                 st.success(f"🟢 短線綠燈（{len(greens)} 檔）")
@@ -880,6 +940,13 @@ elif page == "📡 觀察清單掃描":
 
             st.markdown("### 完整排名")
             st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+
+            st.download_button(
+                "📥 匯出 CSV",
+                data=df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="scan_results.csv",
+                mime="text/csv",
+            )
 
             st.markdown("### 板塊強弱")
             sector_df = df.groupby("板塊")["短線"].mean().round(1).sort_values(ascending=False)
@@ -1107,7 +1174,7 @@ elif page == "💼 持倉監控":
                     [{"buy_price": r["buy_price"], "current_price": r["current_price"],
                       "shares": r["shares"]} for r in results],
                     _dd_budget,
-                    drawdown_threshold=0.15,
+                    drawdown_threshold=st.session_state.get("drawdown_threshold", 15) / 100,
                 )
                 if _dd["risk_level"] == "critical":
                     st.error(_dd["action"])
@@ -1160,7 +1227,8 @@ elif page == "💼 持倉監控":
                         # 從 atr_stop 反推 ATR（atr_stop = buy_price - 2×ATR）
                         _atr_stop_price = r.get("atr_stop", 0) or 0
                         _buy_p = r["buy_price"]
-                        _atr_est = (_buy_p - _atr_stop_price) / 2.0 if _atr_stop_price > 0 and _buy_p > _atr_stop_price else _buy_p * 0.02
+                        _atr_mult = st.session_state.get("atr_multiplier", 2.0)
+                        _atr_est = (_buy_p - _atr_stop_price) / _atr_mult if _atr_stop_price > 0 and _buy_p > _atr_stop_price else _buy_p * 0.02
 
                         with st.expander("🛡 風險管理詳情"):
                             _rm_c1, _rm_c2 = st.columns(2)
@@ -1933,6 +2001,27 @@ elif page == "📊 持倉分析":
                             f"　{sid}：勝率 {wr:.0%}　盈虧比 {avg_w/avg_l:.2f}　"
                             f"→ Half-Kelly 建議 {kelly*100:.1f}%"
                         )
+
+            # 匯出持倉分析 CSV
+            st.markdown("---")
+            _pa_rows = []
+            for h in _pa_holdings:
+                sid = h["stock_id"]
+                row = {"代號": sid, "股數": h["shares"], "買入價": h["buy_price"]}
+                if sid in position_values:
+                    row["市值"] = round(position_values[sid], 0)
+                    row["佔比(%)"] = pct_data.get(sid, 0) if total_value > 0 else 0
+                if sid in vol_data:
+                    row["年化波動率(%)"] = vol_data[sid]
+                _pa_rows.append(row)
+            if _pa_rows:
+                _pa_df = pd.DataFrame(_pa_rows)
+                st.download_button(
+                    "📥 匯出持倉分析 CSV",
+                    data=_pa_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="portfolio_analysis.csv",
+                    mime="text/csv",
+                )
 
 
 # ===== [R5] 交易日誌 =====
