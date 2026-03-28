@@ -310,6 +310,56 @@ def format_message(results):
             lines.append(f"  {r['stock_id']} {r['name']} ({r['avg']}/10)")
         lines.append("")
 
+    # ===== 持倉加倉提醒 =====
+    try:
+        _vars = {}
+        _hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+        with open(_hp, "r", encoding="utf-8") as _f:
+            exec(_f.read(), _vars)
+        _holdings = _vars.get("HOLDINGS", [])
+
+        if _holdings:
+            import valuation
+            add_signals = []
+            for h in _holdings:
+                sid = h["stock_id"]
+                try:
+                    price_df = market.fetch_stock_price(sid)
+                    per_df = market.fetch_per_pbr(sid)
+                    rev_df = market.fetch_monthly_revenue(sid)
+                    ind = market.fetch_stock_industry(sid)
+                    name = market.fetch_stock_name(sid)
+
+                    # 長線分數
+                    long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+                    long_score = long_r["score"]
+
+                    # 消息面
+                    try:
+                        import news as _news
+                        news_r = _news.analyze(sid, name)
+                        news_score = news_r["score"]
+                    except Exception:
+                        news_score = 5
+
+                    # 技術面（看有沒有站回 20MA）
+                    tech_r = technical.analyze(price_df)
+                    above_ma20 = tech_r.get("current_price", 0) > tech_r.get("ma20", 0) if tech_r.get("ma20") else False
+
+                    # 三個條件都滿足
+                    if long_score >= 7 and news_score >= 5 and above_ma20:
+                        add_signals.append(f"  ✅ {sid} {name} 長線{long_score} 消息{news_score} 已站回20MA → 可考慮加倉")
+                except Exception:
+                    pass
+
+            if add_signals:
+                lines.append("💰 持倉加倉機會：")
+                for s in add_signals:
+                    lines.append(s)
+                lines.append("")
+    except Exception:
+        pass
+
     lines.append("📈 今日 Top 5：")
     for r in results[:5]:
         sig = SIGNAL_TEXT[r["overall"]]
