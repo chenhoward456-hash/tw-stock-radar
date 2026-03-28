@@ -34,7 +34,7 @@ import technical
 import fundamental
 import institutional
 import news as news_module
-from scoring import weighted_score
+from scoring import weighted_score, suggest_regime_strategy
 
 
 SIGNAL_TEXT = {"green": "[綠燈]", "yellow": "[黃燈]", "red": "[紅燈]"}
@@ -248,6 +248,92 @@ def format_message(results):
         lines.append("")
     # bull_mild 和 neutral 不特別提示，減少噪音
 
+    # ===== [R6] 三桶策略操作建議 =====
+    try:
+        lines.append("━━━ 三桶操作建議 ━━━")
+        lines.append("")
+
+        # 桶1：看 0050 的 MA20 vs MA60
+        _0050_df = market.fetch_stock_price("0050", days=150)
+        _0050_tech = technical.analyze(_0050_df)
+        _0050_price = _0050_tech.get("current_price", 0)
+        _0050_ma20 = _0050_tech.get("ma20", 0)
+        _0050_ma60 = _0050_tech.get("ma60", 0)
+        _0050_adx = _0050_tech.get("adx")
+
+        # 桶1 判斷
+        if _0050_ma20 and _0050_ma60 and _0050_price:
+            if _0050_price < _0050_ma60:
+                lines.append("桶1 0050：⚠ 跌破 MA60，縮到 5,000 存戰備金")
+            elif _0050_price <= _0050_ma20 * 1.02 and _0050_price > _0050_ma60:
+                lines.append("桶1 0050：✓ 拉回 MA20 但趨勢在，正常 7,000（有戰備金可加碼）")
+            elif _0050_ma20 > _0050_ma60:
+                lines.append("桶1 0050：✓ 趨勢正常，照買 7,000")
+            else:
+                lines.append("桶1 0050：— 觀望，照買 7,000")
+        else:
+            lines.append("桶1 0050：照買 7,000（資料不足無法判斷）")
+
+        # 桶2：找短線動量候選
+        _b2_picks = []
+        for r in results:
+            sid = r.get("stock_id", "")
+            if market.is_etf(sid):
+                continue
+            try:
+                _s_df = market.fetch_stock_price(sid, days=150)
+                _s_tech = technical.analyze(_s_df)
+                _s_adx = _s_tech.get("adx")
+                _s_rsi = _s_tech.get("rsi", 50)
+                _s_price = _s_tech.get("current_price", 0)
+                _s_ma5 = _s_tech.get("ma5")
+                _s_ma20 = _s_tech.get("ma20", 0)
+                _s_ma60 = _s_tech.get("ma60", 0)
+                if (_s_ma5 and _s_ma20 and _s_ma60 and _s_adx
+                        and _s_ma5 > _s_ma20 > _s_ma60
+                        and _s_adx > 20
+                        and 40 <= (_s_rsi or 50) <= 70
+                        and _s_price <= _s_ma20 * 1.05):
+                    _b2_picks.append(f"{sid} {r.get('name', '')}（ADX {_s_adx:.0f}）")
+            except Exception:
+                continue
+
+        if _b2_picks:
+            lines.append(f"桶2 短線：✓ 有候選！{' / '.join(_b2_picks[:3])}")
+            lines.append(f"  → 選 RS 最高的那檔，一次投入累積現金")
+        else:
+            lines.append("桶2 短線：— 沒有符合條件的，4,000 繼續存")
+
+        # 桶3：找逢低佈局候選
+        _b3_picks = []
+        for r in results:
+            sid = r.get("stock_id", "")
+            if market.is_etf(sid):
+                continue
+            try:
+                _s_df = market.fetch_stock_price(sid, days=150)
+                _s_tech = technical.analyze(_s_df)
+                _s_price = _s_tech.get("current_price", 0)
+                _s_ma20 = _s_tech.get("ma20", 0)
+                _s_ma60 = _s_tech.get("ma60", 0)
+                if (_s_ma20 and _s_ma60 and _s_price
+                        and _s_price <= _s_ma20
+                        and _s_ma20 > _s_ma60
+                        and r.get("fund", 0) >= 5):
+                    _b3_picks.append(f"{sid} {r.get('name', '')}（基本面 {r.get('fund', 0)}）")
+            except Exception:
+                continue
+
+        if _b3_picks:
+            lines.append(f"桶3 逢低：✓ 有候選！{' / '.join(_b3_picks[:3])}")
+            lines.append(f"  → 拉回到 MA20 的好股，可以進場")
+        else:
+            lines.append("桶3 逢低：— 沒有拉回的好股，4,000 繼續存")
+
+        lines.append("")
+    except Exception:
+        pass
+
     # 幫每檔算長線分數
     try:
         import valuation
@@ -268,20 +354,50 @@ def format_message(results):
     except Exception:
         pass
 
+    # [R6] 計算 RS 排名
+    try:
+        from ranking import rank_by_relative_strength
+        rank_by_relative_strength(results)
+    except Exception:
+        pass
+
+    # [R6] 動態策略建議
+    try:
+        _fg = _macro_data.get("fear_greed_index", 50) if '_macro_data' in dir() else 50
+        _ms = _macro_data.get("score", 5) if '_macro_data' in dir() else 5
+        _regime = suggest_regime_strategy(_fg, _ms)
+        lines.append(f"📊 {_regime['reason']}")
+        lines.append("")
+    except Exception:
+        pass
+
     greens = [r for r in results if r["avg"] >= 7]
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
     reds = [r for r in results if r["avg"] < 4]
 
-    if greens:
-        lines.append(f"🟢 短線綠燈（{len(greens)} 檔）：")
-        for r in greens:
+    # [R6] 分級：精選 vs 普通綠燈
+    elite = [r for r in greens if r.get("rs_score", 0) >= 50]
+    normal_greens = [r for r in greens if r.get("rs_score", 0) < 50]
+
+    if elite:
+        lines.append(f"🏆 精選候選（綠燈+動量強，{len(elite)} 檔）：")
+        for r in elite:
+            ls = r.get("long_score", 0)
+            rs = r.get("rs_score", 0)
+            lines.append(f"  🏆 {r['stock_id']} {r['name']} 短{r['avg']}/長{ls} RS{rs:.0f}")
+        lines.append("")
+
+    if normal_greens:
+        lines.append(f"🟢 綠燈（{len(normal_greens)} 檔，動量偏弱宜等拉回）：")
+        for r in normal_greens:
             ls = r.get("long_score", 0)
             if ls <= 5:
                 lines.append(f"  ⚠ {r['stock_id']} {r['name']} 短{r['avg']}/長{ls} ← 長線弱，別追")
             else:
                 lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{ls}")
         lines.append("")
-    else:
+
+    if not greens:
         lines.append("💡 今天沒有綠燈股，耐心等待。")
         lines.append("")
 
@@ -368,6 +484,16 @@ def format_message(results):
     lines.append("")
     lines.append(f"共掃描 {len(results)} 檔 ｜ 僅供參考")
 
+    # ===== 系統驗證摘要（有資料才顯示）=====
+    try:
+        from validate import get_accuracy_summary
+        accuracy_line = get_accuracy_summary()
+        if accuracy_line:
+            lines.append("")
+            lines.append(f"📊 {accuracy_line}")
+    except Exception:
+        pass
+
     return "\n".join(lines)
 
 
@@ -410,6 +536,27 @@ def main():
     if not results:
         print("\n⚠ 沒有取得任何結果")
         return
+
+    # 順便驗證過去的掃描記錄（靜默，有資料才會顯示在推播裡）
+    try:
+        from validate import validate_scan, load_validation
+        import tracker as _tracker
+        from datetime import datetime as _dt, timedelta as _td
+        _today = _dt.now()
+        for _d in _tracker.list_records():
+            try:
+                _scan_date = _dt.strptime(_d, "%Y-%m-%d")
+                if (_today - _scan_date).days >= 10 and not load_validation(_d):
+                    print(f"  📊 自動驗證 {_d} 的掃描記錄...", end="", flush=True)
+                    _v = validate_scan(_d)
+                    if _v:
+                        print(f" ✓ 綠燈準度 {_v.get('green_accuracy', '—')}%")
+                    else:
+                        print(" —")
+            except Exception:
+                continue
+    except Exception:
+        pass
 
     message = format_message(results)
 

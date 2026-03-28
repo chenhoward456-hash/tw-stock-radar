@@ -81,6 +81,8 @@ def _yield_curve_signal(us10y_df, us3m_df):
     try:
         y10 = float(us10y_df["Close"].iloc[-1])
         y3m = float(us3m_df["Close"].iloc[-1]) / 10  # ^IRX 單位是 bp/10
+        if np.isnan(y10) or np.isnan(y3m):
+            return 0, None
         spread = y10 - y3m
 
         if spread < -0.5:

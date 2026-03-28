@@ -475,6 +475,168 @@ def generate_signals_value(df, trailing_stop_pct=-12.0):
     return signals, position
 
 
+def generate_signals_composite(df, stop_loss_pct=-8.0):
+    """
+    [R6] 複合評分策略 — 模擬 R6 的多因子評分邏輯
+
+    進場條件（全部滿足）：
+    1. MA5 > MA20 > MA60（多頭排列）
+    2. ADX > 20（趨勢存在，避免盤整假訊號）
+    3. RSI 40-70（不超買、不超賣）
+    4. 量能放大（5日均量 > 20日均量）
+    5. 非短線過熱（偏離 MA20 < 5%）
+
+    出場條件（任一觸發）：
+    1. ATR 動態停損（2x ATR）
+    2. MA20 跌破 MA60（趨勢反轉）
+    3. RSI > 80（嚴重超買）
+    4. ADX < 15 且已獲利 > 5%（趨勢消失，先走）
+
+    核心思路：比單一策略多了 ADX 過濾 + 過熱保護 + 趨勢消失偵測，
+    犧牲一些交易頻率來換更高的勝率和盈虧比。
+    """
+    close = df["close"].astype(float)
+    high = df["max"].astype(float) if "max" in df.columns else close
+    low = df["min"].astype(float) if "min" in df.columns else close
+    volume = df["Trading_Volume"].astype(float)
+
+    ma5 = close.rolling(5).mean()
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    rsi = _calc_rsi(close)
+    atr = _calc_atr(high, low, close)
+    vol_ma5 = volume.rolling(5).mean()
+    vol_ma20 = volume.rolling(20).mean()
+
+    # ADX calculation (inline, simplified)
+    tr = pd.concat([high - low,
+                    (high - close.shift(1)).abs(),
+                    (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0),
+                        index=high.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0),
+                         index=high.index)
+    atr_s = tr.ewm(alpha=1/14, min_periods=14).mean()
+    plus_di = (plus_dm.ewm(alpha=1/14, min_periods=14).mean() / atr_s) * 100
+    minus_di = (minus_dm.ewm(alpha=1/14, min_periods=14).mean() / atr_s) * 100
+    di_sum = plus_di + minus_di
+    dx = ((plus_di - minus_di).abs() / di_sum.replace(0, np.nan)) * 100
+    adx = dx.ewm(alpha=1/14, min_periods=14).mean()
+
+    signals = []
+    position = False
+    buy_price = 0
+    stop_price = 0
+
+    for i in range(61, len(df)):
+        curr_close = close.iloc[i]
+        curr_ma5 = ma5.iloc[i]
+        curr_ma20 = ma20.iloc[i]
+        curr_ma60 = ma60.iloc[i]
+        curr_rsi = rsi.iloc[i] if not np.isnan(rsi.iloc[i]) else 50
+        curr_atr = atr.iloc[i] if not np.isnan(atr.iloc[i]) else 0
+        curr_adx = adx.iloc[i] if not np.isnan(adx.iloc[i]) else 0
+        curr_vol5 = vol_ma5.iloc[i] if not np.isnan(vol_ma5.iloc[i]) else 0
+        curr_vol20 = vol_ma20.iloc[i] if not np.isnan(vol_ma20.iloc[i]) else 1
+
+        if any(v is None or (isinstance(v, float) and np.isnan(v))
+               for v in [curr_ma5, curr_ma20, curr_ma60]):
+            continue
+
+        # === 持倉中的出場檢查 ===
+        if position and buy_price > 0:
+            # ATR 停損
+            if stop_price > 0 and curr_close <= stop_price:
+                dd = (curr_close / buy_price - 1) * 100
+                signals.append({
+                    "type": "SELL", "date": df.iloc[i]["date"],
+                    "price": curr_close, "index": i,
+                    "reason": f"ATR停損（{dd:.1f}%）",
+                })
+                position = False
+                buy_price = 0
+                stop_price = 0
+                continue
+
+            # 趨勢反轉
+            if curr_ma20 < curr_ma60:
+                dd = (curr_close / buy_price - 1) * 100
+                signals.append({
+                    "type": "SELL", "date": df.iloc[i]["date"],
+                    "price": curr_close, "index": i,
+                    "reason": f"趨勢反轉 MA20<MA60（{dd:+.1f}%）",
+                })
+                position = False
+                buy_price = 0
+                stop_price = 0
+                continue
+
+            # RSI 嚴重超買
+            if curr_rsi > 80:
+                gain = (curr_close / buy_price - 1) * 100
+                signals.append({
+                    "type": "SELL", "date": df.iloc[i]["date"],
+                    "price": curr_close, "index": i,
+                    "reason": f"RSI超買 {curr_rsi:.0f}（{gain:+.1f}%）",
+                })
+                position = False
+                buy_price = 0
+                stop_price = 0
+                continue
+
+            # ADX 趨勢消失 + 已有獲利
+            gain_pct = (curr_close / buy_price - 1) * 100
+            if curr_adx < 15 and gain_pct > 5:
+                signals.append({
+                    "type": "SELL", "date": df.iloc[i]["date"],
+                    "price": curr_close, "index": i,
+                    "reason": f"趨勢消失 ADX={curr_adx:.0f}，先保獲利（{gain_pct:+.1f}%）",
+                })
+                position = False
+                buy_price = 0
+                stop_price = 0
+                continue
+
+            # 移動停損上調
+            if curr_atr > 0:
+                new_stop = curr_close - 2 * curr_atr
+                if new_stop > stop_price:
+                    stop_price = new_stop
+
+        # === 進場條件 ===
+        if not position:
+            # 1. 多頭排列
+            bullish_ma = curr_ma5 > curr_ma20 > curr_ma60
+            # 2. ADX 確認趨勢
+            trend_exists = curr_adx > 20
+            # 3. RSI 健康範圍
+            rsi_ok = 40 <= curr_rsi <= 70
+            # 4. 量能支撐
+            vol_ok = curr_vol5 > curr_vol20 if curr_vol20 > 0 else True
+            # 5. 非過熱（偏離 MA20 < 5%）
+            deviation = (curr_close / curr_ma20 - 1) * 100 if curr_ma20 > 0 else 0
+            not_overheated = deviation < 5
+
+            if bullish_ma and trend_exists and rsi_ok and vol_ok and not_overheated:
+                signals.append({
+                    "type": "BUY", "date": df.iloc[i]["date"],
+                    "price": curr_close, "index": i,
+                    "reason": f"複合進場（ADX={curr_adx:.0f} RSI={curr_rsi:.0f}）",
+                })
+                position = True
+                buy_price = curr_close
+                if curr_atr > 0:
+                    atr_stop = buy_price - 2 * curr_atr
+                    fixed_stop = buy_price * (1 + stop_loss_pct / 100)
+                    stop_price = max(atr_stop, fixed_stop)
+                else:
+                    stop_price = buy_price * (1 + stop_loss_pct / 100)
+
+    return signals, position
+
+
 def calculate_trades(signals, is_us=False):
     """從訊號列表計算每筆交易的損益（含交易成本 + 滑價）"""
     slippage = SLIPPAGE_PCT / 100
@@ -765,6 +927,19 @@ def main():
     if trades_c and len(trades_c) >= 5:
         mc_c = monte_carlo(trades_c)
 
+    # 策略 D：R6 複合評分（多因子）
+    print(f"  [策略D] R6 複合評分...")
+    signals_d, hold_d = generate_signals_composite(price_df)
+    trades_d = calculate_trades(signals_d, is_us=is_us)
+    print(f"  → {len(trades_d)} 筆交易")
+
+    wf_d = None
+    mc_d = None
+    if len(price_df) >= 200:
+        wf_d = walk_forward(price_df, generate_signals_composite, calculate_trades, is_us=is_us)
+    if trades_d and len(trades_d) >= 5:
+        mc_d = monte_carlo(trades_d)
+
     print_report(stock_id, name, price_df, trades_a, hold_a, is_us=is_us,
                  strategy_name="均線交叉 + RSI + 量能 + 停損 -8%（波段）",
                  wf_result=wf_a, mc_result=mc_a)
@@ -774,6 +949,9 @@ def main():
     print_report(stock_id, name, price_df, trades_c, hold_c, is_us=is_us,
                  strategy_name="長線佈局 — 逢低買入 + 漲高出場 + 停利 -12%",
                  wf_result=wf_c, mc_result=mc_c)
+    print_report(stock_id, name, price_df, trades_d, hold_d, is_us=is_us,
+                 strategy_name="[R6] 複合評分 — ADX+MA+RSI+量能+過熱保護",
+                 wf_result=wf_d, mc_result=mc_d)
 
 
 if __name__ == "__main__":

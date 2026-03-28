@@ -16,6 +16,26 @@
 
 # ─── Phase 1-A: ATR 移動停損 ─────────────────────────────────────────────────
 
+def get_dynamic_atr_multiplier(macro_score=None):
+    """
+    [R6] 根據 macro 環境動態調整 ATR 乘數
+
+    牛市（macro ≥ 7）：2.0x — 給波動空間，讓贏家跑
+    中性（macro 4-7）：1.8x — 稍微收緊
+    熊市（macro < 4）：1.5x — 收緊停損，保護資金
+
+    回傳：atr_multiplier (float)
+    """
+    if macro_score is None:
+        return 2.0
+    if macro_score >= 7:
+        return 2.0
+    elif macro_score >= 4:
+        return 1.8
+    else:
+        return 1.5
+
+
 def calc_atr_trailing_stop(current_price, buy_price, peak_price, atr,
                             atr_multiplier=2.0, min_stop_pct=0.08):
     """
@@ -172,6 +192,94 @@ def calc_partial_tp(current_price, buy_price, shares, entry_stop=None, atr=None)
         "current_r": round(current_r, 2),
         "status": status,
         "action": action,
+    }
+
+
+def calc_smart_exit(current_price, buy_price, shares, current_score,
+                    entry_stop=None, atr=None):
+    """
+    [R6] 智慧出場 — 到 R 目標時根據當前評分決定出多少
+
+    傳統 R 系統：到 2R 就全出。
+    智慧出場：
+      - 到 2R + score ≥ 7 → 只出 25%，trailing stop 拉到 1R（讓贏家繼續跑）
+      - 到 2R + score 5-7 → 出 50%
+      - 到 2R + score < 5 → 全出
+      - 到 1R + score ≥ 7 → 出 30%（而非 50%）
+      - 到 1R + score < 5 → 出 60%
+
+    參數：
+      current_score: 當前加權綜合分數（重新評分後的）
+    """
+    if buy_price <= 0:
+        return {"error": "buy_price invalid"}
+
+    # 算 R
+    if entry_stop and entry_stop > 0 and entry_stop < buy_price:
+        eff_stop = entry_stop
+    elif atr and atr > 0:
+        eff_stop = buy_price - 2 * atr
+    else:
+        eff_stop = buy_price * 0.92
+
+    r_value = buy_price - eff_stop
+    if r_value <= 0:
+        r_value = buy_price * 0.08
+
+    current_r = (current_price - buy_price) / r_value if r_value > 0 else 0
+
+    tp1 = buy_price + 1.0 * r_value
+    tp2 = buy_price + 2.0 * r_value
+    tp3 = buy_price + 3.0 * r_value
+
+    # 智慧出場邏輯
+    if current_r >= 2.0:
+        if current_score >= 7:
+            sell_pct = 0.25
+            new_stop = tp1
+            reason = f"到 2R 但評分仍強（{current_score}），只出 25%，停損拉到 1R（{tp1:.1f}）讓贏家跑"
+        elif current_score >= 5:
+            sell_pct = 0.50
+            new_stop = buy_price + 0.5 * r_value
+            reason = f"到 2R，評分中性（{current_score}），出 50%，停損拉到 0.5R"
+        else:
+            sell_pct = 1.0
+            new_stop = None
+            reason = f"到 2R 且評分轉弱（{current_score}），建議全部出場"
+    elif current_r >= 1.0:
+        if current_score >= 7:
+            sell_pct = 0.30
+            new_stop = eff_stop  # 維持原停損
+            reason = f"到 1R，評分強（{current_score}），只出 30%，持續追蹤"
+        elif current_score >= 5:
+            sell_pct = 0.50
+            new_stop = eff_stop
+            reason = f"到 1R，評分中性（{current_score}），出 50%"
+        else:
+            sell_pct = 0.60
+            new_stop = eff_stop
+            reason = f"到 1R 但評分轉弱（{current_score}），出 60%，剩餘設緊停損"
+    else:
+        sell_pct = 0.0
+        new_stop = eff_stop
+        if current_r < 0:
+            reason = f"虧損中（{current_r:.1f}R），持有或停損在 {eff_stop:.1f}"
+        else:
+            reason = f"未到 1R（當前 {current_r:.1f}R），繼續持有"
+
+    sell_shares = int(shares * sell_pct)
+
+    return {
+        "current_r": round(current_r, 2),
+        "current_score": current_score,
+        "sell_pct": sell_pct,
+        "sell_shares": sell_shares,
+        "remain_shares": shares - sell_shares,
+        "new_stop": round(new_stop, 2) if new_stop else None,
+        "tp1": round(tp1, 1),
+        "tp2": round(tp2, 1),
+        "tp3": round(tp3, 1),
+        "reason": reason,
     }
 
 

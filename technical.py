@@ -29,7 +29,7 @@ def _macd(prices, fast=12, slow=26, signal=9):
 def _kd(high, low, close, k_period=9, d_period=3):
     low_min = low.rolling(window=k_period).min()
     high_max = high.rolling(window=k_period).max()
-    rsv = (close - low_min) / (high_max - low_min) * 100
+    rsv = (close - low_min) / (high_max - low_min).replace(0, np.nan) * 100
     rsv = rsv.fillna(50)
     k = rsv.ewm(com=d_period - 1, min_periods=d_period).mean()
     d = k.ewm(com=d_period - 1, min_periods=d_period).mean()
@@ -73,6 +73,56 @@ def _atr(high, low, close, period=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(window=period).mean()
     return atr
+
+
+def _adx(high, low, close, period=14):
+    """
+    [R6] 計算 ADX（Average Directional Index）趨勢強度指標
+
+    ADX > 25: 趨勢明確，MA 交叉訊號可信
+    ADX 20-25: 趨勢微弱
+    ADX < 20: 盤整，MA 交叉不可靠
+
+    回傳：(adx_value, plus_di, minus_di)
+    """
+    if len(high) < period + 5:
+        return None, None, None
+
+    # True Range
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Directional Movement
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0),
+                        index=high.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0),
+                         index=high.index)
+
+    # Smoothed averages (Wilder's smoothing)
+    atr_smooth = tr.ewm(alpha=1/period, min_periods=period).mean()
+    plus_dm_smooth = plus_dm.ewm(alpha=1/period, min_periods=period).mean()
+    minus_dm_smooth = minus_dm.ewm(alpha=1/period, min_periods=period).mean()
+
+    # DI
+    plus_di = (plus_dm_smooth / atr_smooth) * 100
+    minus_di = (minus_dm_smooth / atr_smooth) * 100
+
+    # DX and ADX
+    di_sum = plus_di + minus_di
+    di_diff = (plus_di - minus_di).abs()
+    dx = (di_diff / di_sum.replace(0, np.nan)) * 100
+    adx = dx.ewm(alpha=1/period, min_periods=period).mean()
+
+    adx_val = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else None
+    pdi_val = plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else None
+    mdi_val = minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else None
+
+    return adx_val, pdi_val, mdi_val
 
 
 def _resample_weekly(df):
@@ -189,9 +239,15 @@ def analyze(price_df):
     """
     result = {"signal": "yellow", "score": 5, "details": []}
 
-    if price_df.empty or len(price_df) < 60:
-        result["details"].append("⚠ 股價資料不足 60 日，無法完整分析")
+    if price_df.empty or len(price_df) < 20:
+        result["details"].append("⚠ 股價資料不足 20 日，無法分析")
+        result["confidence"] = "none"
         return result
+
+    if len(price_df) < 60:
+        result["details"].append("⚠ 股價資料不足 60 日，僅做基礎分析（MACD/KD 可能不準）")
+        result["confidence"] = "low"
+        # 繼續分析但標記信心度低，下面各指標會自己處理 NaN
 
     df = price_df.sort_values("date").reset_index(drop=True)
     close = df["close"].astype(float)
@@ -208,19 +264,44 @@ def analyze(price_df):
     ma20 = close.rolling(20).mean()
     ma60 = close.rolling(60).mean()
 
+    # ===== [R6] ADX 趨勢強度（必須在 MA 評分之前，因為 adx_discount 會用到）=====
+    adx_val, plus_di, minus_di = _adx(high, low, close)
+    adx_discount = 1.0  # MA 訊號折扣因子
+
+    if adx_val is not None:
+        if adx_val >= 30:
+            details.append(f"✓ ADX = {adx_val:.0f}（趨勢強勁，MA 訊號可信）")
+        elif adx_val >= 25:
+            details.append(f"— ADX = {adx_val:.0f}（趨勢存在）")
+        elif adx_val >= 20:
+            details.append(f"— ADX = {adx_val:.0f}（趨勢微弱，MA 訊號打折）")
+            adx_discount = 0.6
+        else:
+            details.append(f"⚠ ADX = {adx_val:.0f}（盤整中，MA 交叉不可靠）")
+            adx_discount = 0.3
+
+        # DI 交叉方向
+        if plus_di is not None and minus_di is not None:
+            if plus_di > minus_di and adx_val >= 25:
+                details.append(f"  +DI({plus_di:.0f}) > -DI({minus_di:.0f})，多方主導")
+            elif minus_di > plus_di and adx_val >= 25:
+                details.append(f"  -DI({minus_di:.0f}) > +DI({plus_di:.0f})，空方主導")
+
     above_ma5 = current_price > ma5.iloc[-1]
     above_ma20 = current_price > ma20.iloc[-1]
-    above_ma60 = current_price > ma60.iloc[-1]
+    above_ma60 = current_price > ma60.iloc[-1] if not np.isnan(ma60.iloc[-1]) else True  # assume neutral if no data
 
+    # [R6] MA 訊號乘以 ADX 折扣（盤整時不信任 MA 排列）
     if above_ma5 and above_ma20 and above_ma60:
-        details.append("✓ 股價站上所有均線（5/20/60日），多頭排列")
-        score += 2
+        _ma_pts = 2 * adx_discount
+        details.append(f"✓ 股價站上所有均線（5/20/60日），多頭排列{' [ADX 打折]' if adx_discount < 1 else ''}")
+        score += _ma_pts
     elif above_ma20 and above_ma60:
+        score += 1 * adx_discount
         details.append("✓ 股價在 20 日和 60 日均線之上")
-        score += 1
     elif not above_ma20 and not above_ma60:
-        details.append("✗ 股價跌破 20 日和 60 日均線，偏空")
-        score -= 2
+        score -= 2 * adx_discount
+        details.append(f"✗ 股價跌破 20 日和 60 日均線，偏空{' [ADX 打折]' if adx_discount < 1 else ''}")
     else:
         details.append("— 股價在均線附近震盪")
 
@@ -314,13 +395,14 @@ def analyze(price_df):
     # ===== 布林通道 =====
     bb_upper, bb_middle, bb_lower = _bollinger(close)
     if len(bb_upper.dropna()) > 0:
-        bb_width = (bb_upper.iloc[-1] - bb_lower.iloc[-1]) / bb_middle.iloc[-1] * 100
-        if current_price >= bb_upper.iloc[-1]:
-            details.append(f"⚠ 股價觸及布林上軌（通道寬度 {bb_width:.1f}%）")
-            score -= 0.5
-        elif current_price <= bb_lower.iloc[-1]:
-            details.append(f"✓ 股價觸及布林下軌（通道寬度 {bb_width:.1f}%）")
-            score += 0.5
+        if bb_middle.iloc[-1] > 0:
+            bb_width = (bb_upper.iloc[-1] - bb_lower.iloc[-1]) / bb_middle.iloc[-1] * 100
+            if current_price >= bb_upper.iloc[-1]:
+                details.append(f"⚠ 股價觸及布林上軌（通道寬度 {bb_width:.1f}%）")
+                score -= 0.5
+            elif current_price <= bb_lower.iloc[-1]:
+                details.append(f"✓ 股價觸及布林下軌（通道寬度 {bb_width:.1f}%）")
+                score += 0.5
 
     # ===== 成交量 =====
     vol_5 = volume.tail(5).mean()
@@ -339,23 +421,23 @@ def analyze(price_df):
     else:
         details.append(f"— 成交量正常（5日/20日均量比 {vol_ratio:.1f}）")
 
-    # ===== 趨勢方向（20MA vs 60MA）=====
+    # ===== 趨勢方向（20MA vs 60MA）[R6: ADX 折扣] =====
     if len(ma20.dropna()) > 0 and len(ma60.dropna()) > 0:
         trend_diff = ma20.iloc[-1] - ma60.iloc[-1]
         if ma20.iloc[-1] > ma60.iloc[-1]:
             if len(ma20.dropna()) >= 10 and ma20.iloc[-10] <= ma60.iloc[-10]:
-                details.append("✓ 中期趨勢剛轉多（20MA 突破 60MA），動能啟動")
-                score += 1.5
+                details.append(f"✓ 中期趨勢剛轉多（20MA 突破 60MA），動能啟動{' [ADX 打折]' if adx_discount < 1 else ''}")
+                score += 1.5 * adx_discount
             else:
                 details.append("✓ 中期趨勢向上（20MA > 60MA）")
-                score += 1
+                score += 1 * adx_discount
         else:
             if len(ma20.dropna()) >= 10 and ma20.iloc[-10] >= ma60.iloc[-10]:
-                details.append("⚠ 中期趨勢剛轉空（20MA 跌破 60MA），小心")
-                score -= 1.5
+                details.append(f"⚠ 中期趨勢剛轉空（20MA 跌破 60MA），小心{' [ADX 打折]' if adx_discount < 1 else ''}")
+                score -= 1.5 * adx_discount
             else:
                 details.append("⚠ 中期趨勢向下（20MA < 60MA）")
-                score -= 1
+                score -= 1 * adx_discount
 
     # ===== 近期漲跌幅 =====
     pct_5d = (close.iloc[-1] / close.iloc[-6] - 1) * 100 if len(close) > 5 else 0
@@ -372,6 +454,19 @@ def analyze(price_df):
         score -= 1
     if pct_20d < -20:
         details.append("⚠ 中線跌幅已大，留意是否為趨勢破壞")
+
+    # ===== [R6] 52 週新高突破 + 量能確認 =====
+    if len(close) >= 240:
+        high_52w = close.tail(240).max()
+        near_high = current_price >= high_52w * 0.97  # 距離 52 週高點 3% 以內
+
+        if near_high:
+            if vol_ratio > 1.5:
+                details.append(f"🔥 52 週新高突破 + 量能放大（{vol_ratio:.1f}x），強勢突破訊號")
+                score += 1.5
+            else:
+                details.append(f"— 接近 52 週新高但量能不足（{vol_ratio:.1f}x），突破可能虛假")
+                score -= 0.5
 
     # ===== 多時間框架分析（第三輪新增）=====
     weekly = _weekly_trend(price_df)
@@ -442,5 +537,9 @@ def analyze(price_df):
     result["stop_loss"] = stop_loss
     result["weekly_trend"] = weekly_trend
     result["divergence"] = divergence
+    result["adx"] = adx_val
+    result["ma5"] = ma5.iloc[-1] if len(ma5.dropna()) > 0 else None
+    if "confidence" not in result:
+        result["confidence"] = "high"
 
     return result

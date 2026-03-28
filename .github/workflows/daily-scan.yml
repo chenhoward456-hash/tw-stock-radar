@@ -2,7 +2,7 @@ name: 每日臺股掃描
 
 on:
   schedule:
-    - cron: '30 7 * * 1-5'
+    - cron: '30 23 * * 0-4'  # UTC 23:30 = 台灣早上 07:30，週一到五
   workflow_dispatch:
 
 jobs:

@@ -10,6 +10,7 @@
 import sys
 import os
 import time
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +20,10 @@ import market
 import technical
 import fundamental
 import institutional
-from scoring import calc_consensus_score
+import news as news_module
+from scoring import weighted_score, calc_consensus_score, suggest_regime_strategy
+from ranking import rank_by_relative_strength
+import sector_rotation
 
 
 SIGNAL_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
@@ -45,17 +49,20 @@ def filter_universe(stock_id, min_avg_volume=200, min_days=60):
         if "Trading_Volume" in price_df.columns:
             vol = price_df["Trading_Volume"].astype(float)
             avg_vol_lots = vol.tail(20).mean() / 1000
-            if avg_vol_lots < min_avg_volume:
-                return False, f"均量過低（{avg_vol_lots:.0f} 張 < {min_avg_volume}）"
+            if pd.isna(avg_vol_lots) or avg_vol_lots < min_avg_volume:
+                vol_str = f"{avg_vol_lots:.0f}" if not pd.isna(avg_vol_lots) else "N/A"
+                return False, f"均量過低（{vol_str} 張 < {min_avg_volume}）"
 
         return True, None
     except Exception:
         return False, "資料取得失敗"
 
 
-def scan_one(stock_id):
-    """掃描單一股票，回傳各面向分數"""
+def scan_one(stock_id, macro_multiplier=1.0, sector_rs_label=None,
+             strategy="balanced"):
+    """掃描單一股票，回傳各面向分數（使用加權評分 + 真實新聞分數）"""
     try:
+        name = market.fetch_stock_name(stock_id)
         price_df = market.fetch_stock_price(stock_id)
         per_df = market.fetch_per_pbr(stock_id)
         inst_df = market.fetch_institutional(stock_id)
@@ -70,7 +77,20 @@ def scan_one(stock_id):
             fund = fundamental.analyze(per_df, rev_df, industry)
         inst = institutional.analyze(inst_df)
 
-        avg = round((tech["score"] + fund["score"] + inst["score"]) / 3, 1)
+        # 抓真實新聞分數（失敗給中性 5 分）
+        try:
+            news_result = news_module.analyze(stock_id, name)
+            news_score = news_result["score"]
+        except Exception:
+            news_score = 5.0
+
+        # 用 weighted_score 計算（R6: 加入產業輪動 bonus + 策略切換）
+        avg, score_info = weighted_score(
+            tech["score"], fund["score"], inst["score"], news_score,
+            strategy=strategy, is_us=market.is_us(stock_id),
+            macro_multiplier=macro_multiplier,
+            sector_rs_label=sector_rs_label,
+        )
 
         highlights = []
         if tech["signal"] == "green":
@@ -85,6 +105,10 @@ def scan_one(stock_id):
             highlights.append("法人買超")
         if inst["signal"] == "red":
             highlights.append("法人賣超")
+        if news_score >= 7:
+            highlights.append("消息面佳")
+        if news_score <= 3:
+            highlights.append("消息面差")
 
         if avg >= 7:
             overall = "green"
@@ -93,19 +117,21 @@ def scan_one(stock_id):
         else:
             overall = "red"
 
-        # [R5] Consensus Score
-        cs = calc_consensus_score(tech["score"], fund["score"], inst["score"], 5.0)
+        # [R5] Consensus Score（用真實新聞分數）
+        cs = calc_consensus_score(tech["score"], fund["score"], inst["score"], news_score)
 
         return {
             "tech": tech["score"],
             "fund": fund["score"],
             "inst": inst["score"],
+            "news": news_score,
             "avg": avg,
             "overall": overall,
             "highlights": "、".join(highlights) if highlights else "條件中性",
             "consensus": cs["consensus_score"],
             "consensus_dir": cs["direction"],
             "consensus_strength": cs["signal_strength"],
+            "confidence": score_info.get("confidence", "medium"),
         }
     except Exception:
         return None
@@ -244,16 +270,19 @@ def print_diff(diff_result):
 def print_table(results):
     """印出排名表格"""
     print()
-    print(f" {'排名':>2}  {'代號':<6} {'名稱':<6} {'板塊':<8} {'技術':>4} {'基本':>4} {'籌碼':>4} {'綜合':>4} {'一致':>4}  訊號")
-    print(" " + "─" * 78)
+    print(f" {'排名':>2}  {'代號':<6} {'名稱':<6} {'板塊':<8} {'技術':>4} {'基本':>4} {'籌碼':>4} {'消息':>4} {'綜合':>4} {'一致':>4} {'RS':>4}  訊號")
+    print(" " + "─" * 90)
 
     for i, r in enumerate(results, 1):
         icon = SIGNAL_ICON[r["overall"]]
         cs = r.get("consensus", "")
         cs_str = f"{cs:>3}" if cs != "" else "  —"
+        news = r.get("news", 5.0)
+        rs = r.get("rs_score", 0)
+        rs_str = f"{rs:>4.0f}" if rs else "  —"
         print(
             f" {i:>2}.  {r['stock_id']:<6} {r['name']:<6} {r['sector']:<8}"
-            f" {r['tech']:>4} {r['fund']:>4} {r['inst']:>4} {r['avg']:>4} {cs_str}  {icon}"
+            f" {r['tech']:>4} {r['fund']:>4} {r['inst']:>4} {news:>4} {r['avg']:>4} {cs_str} {rs_str}  {icon}"
         )
 
 
@@ -288,12 +317,25 @@ def print_green_picks(results):
     greens = [r for r in results if r["avg"] >= 7]
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
 
+    # [R6] 精選：分數綠燈 + RS 前半段
+    elite = [r for r in greens if r.get("rs_score", 0) >= 50]
+    normal_greens = [r for r in greens if r.get("rs_score", 0) < 50]
+
     print()
-    if greens:
-        print(f" 🟢 綠燈候選（{len(greens)} 檔）：")
-        for r in greens:
+    if elite:
+        print(f" 🏆 精選候選（綠燈 + 動量強，{len(elite)} 檔）：")
+        for r in elite:
+            rs = r.get("rs_score", 0)
+            rs_tag = r.get("rs_label", "")
+            print(f"  🏆 {r['stock_id']} {r['name']}（{r['avg']}/10, RS {rs:.0f} {rs_tag}）— {r['highlights']}")
+
+    if normal_greens:
+        print()
+        print(f" 🟢 綠燈候選（{len(normal_greens)} 檔，動量偏弱宜等拉回）：")
+        for r in normal_greens:
             print(f"  🟢 {r['stock_id']} {r['name']}（{r['avg']}/10）— {r['highlights']}")
-    else:
+
+    if not greens:
         print(" 💡 目前沒有綠燈候選人（需 7 分以上），建議耐心等待。")
 
     if watchlist:
@@ -355,17 +397,54 @@ def main():
         print()
 
     names = market.fetch_stock_names(active_stocks)
+
+    # 取得總體經濟環境乘數（一次就好）
+    try:
+        import macro as _macro
+        _macro_data = _macro.analyze()
+        _macro_mult = _macro_data["risk_multiplier"]
+        _macro_score = _macro_data["score"]
+        _fg_index = _macro_data.get("fear_greed_index", 50)
+        if _macro_mult < 0.95:
+            print(f" ⚠ 總體環境偏弱（環境分 {_macro_score}/10），個股評分 ×{_macro_mult}")
+        else:
+            print(f" ✓ 總體環境正常（環境分 {_macro_score}/10）")
+        print()
+    except Exception:
+        _macro_mult = 1.0
+        _macro_score = 5
+        _fg_index = 50
+
+    # [R6] 動態策略切換
+    _regime = suggest_regime_strategy(_fg_index, _macro_score)
+    _auto_strategy = _regime["suggested_strategy"]
+    print(f" 📊 環境偵測：{_regime['reason']}")
+    print(f" → 自動採用「{_auto_strategy}」策略")
+    print()
+
     print(f" → 載入完成，開始掃描 {len(active_stocks)} 檔\n")
+
+    # [R6] 取得產業輪動資料（用於個股 bonus）
+    _sector_rs = {}
+    try:
+        _rotation = sector_rotation.detect_rotation()
+        for r in _rotation:
+            _sector_rs[r["sector"]] = r.get("rs_label", "同步大盤")
+    except Exception:
+        pass
 
     results = []
     done_count = 0
 
     def _scan_with_info(stock_id):
-        data = scan_one(stock_id)
+        sector = stock_sectors.get(stock_id, "其他")
+        sr_label = _sector_rs.get(sector)
+        data = scan_one(stock_id, macro_multiplier=_macro_mult,
+                        sector_rs_label=sr_label, strategy=_auto_strategy)
         if data:
             data["stock_id"] = stock_id
             data["name"] = names.get(stock_id, stock_id)
-            data["sector"] = stock_sectors.get(stock_id, "其他")
+            data["sector"] = sector
         return stock_id, data
 
     with ThreadPoolExecutor(max_workers=5) as pool:
@@ -384,6 +463,10 @@ def main():
     if not results:
         print("\n ⚠ 沒有取得任何資料")
         return
+
+    # [R6] 計算相對強度排名
+    print("\n 📊 計算相對強度排名...")
+    rank_by_relative_strength(results)
 
     results.sort(key=lambda x: x["avg"], reverse=True)
 

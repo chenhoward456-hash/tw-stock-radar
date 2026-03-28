@@ -39,7 +39,10 @@ def _volatility_adjustment(atr, price, baseline_vol=0.02):
 
     baseline_vol: 基準日波動率 2%（一般個股）
     """
-    if not atr or not price or price <= 0:
+    try:
+        if not atr or np.isnan(atr) or not price or price <= 0:
+            return 1.0
+    except (TypeError, ValueError):
         return 1.0
     daily_vol = atr / price
     if daily_vol <= 0:

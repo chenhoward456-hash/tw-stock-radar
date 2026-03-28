@@ -84,6 +84,11 @@ def analyze_etf(price_df, etf_info=None, per_df=None):
         if not dy_valid.empty:
             dy = float(dy_valid.iloc[-1])
 
+    # [R6] 異常值保護：殖利率不可能超過 30%，超過就是資料錯誤
+    if dy > 30:
+        details.append(f"⚠ 殖利率資料異常（{dy:.1f}%），可能因分割或資料源錯誤，忽略")
+        dy = 0
+
     if dy > 0:
         if dy > 6:
             details.append(f"✓ 殖利率 {dy:.1f}%（高配息）")
@@ -136,6 +141,52 @@ def analyze_etf(price_df, etf_info=None, per_df=None):
                     score -= 0.5
                 else:
                     details.append(f"— 52 週價格位置 {position:.0f}%（中間區域）")
+
+    # ===== [R6] ETF 趨勢健康度 =====
+    if not price_df.empty and "close" in price_df.columns:
+        closes = pd.to_numeric(price_df["close"], errors="coerce").dropna()
+
+        # 近期報酬
+        if len(closes) >= 21:
+            ret_20d = (closes.iloc[-1] / closes.iloc[-21] - 1) * 100
+            details.append(f"— 近 20 日報酬：{ret_20d:+.1f}%")
+            if ret_20d < -10:
+                details.append(f"⚠ 短期跌幅較大，若長期趨勢仍在可視為加碼機會")
+                score += 0.5  # 逆向：ETF 跌多可以加碼
+            elif ret_20d > 10:
+                details.append(f"⚠ 短期漲幅較大，追高注意")
+                score -= 0.5
+
+        if len(closes) >= 61:
+            ret_60d = (closes.iloc[-1] / closes.iloc[-61] - 1) * 100
+            details.append(f"— 近 60 日報酬：{ret_60d:+.1f}%")
+
+        # 均線相對位置（判斷長期趨勢）
+        if len(closes) >= 60:
+            ma20 = closes.rolling(20).mean().iloc[-1]
+            ma60 = closes.rolling(60).mean().iloc[-1]
+            current = closes.iloc[-1]
+
+            if current > ma20 > ma60:
+                details.append(f"✓ 價格在均線之上，長期趨勢健康")
+                score += 1
+            elif current > ma60 and current <= ma20:
+                details.append(f"— 拉回到 20 日均線，長期趨勢仍在")
+                score += 0.5
+            elif current < ma60:
+                details.append(f"⚠ 跌破 60 日均線，長期趨勢轉弱")
+                score -= 1.5
+
+        # 波動度
+        if len(closes) >= 20:
+            daily_ret = closes.pct_change().tail(20)
+            vol = daily_ret.std() * (252 ** 0.5) * 100  # 年化波動率
+            if vol > 25:
+                details.append(f"⚠ 波動率偏高（年化 {vol:.0f}%），短期震盪大")
+            elif vol < 10:
+                details.append(f"✓ 波動率低（年化 {vol:.0f}%），走勢穩定")
+            else:
+                details.append(f"— 波動率正常（年化 {vol:.0f}%）")
 
     # ===== 折溢價（如果有 NAV）=====
     if etf_info and etf_info.get("nav_price") and etf_info.get("current_price"):
@@ -339,6 +390,39 @@ def analyze(per_df, revenue_df, industry_category=""):
             elif trend < -10:
                 details.append(f"⚠ 營收趨勢向下（近3月vs前3月：{trend:+.1f}%）")
                 score -= 1
+
+        # [R6] 營收加速度因子 — 連續 3 月 YoY 加速 = 轉機股
+        if len(rdf) >= 15:
+            # 計算最近 3 個月各自的 YoY
+            yoy_list = []
+            for i in range(3):
+                idx = -(i + 1)
+                base_idx = idx - 12
+                if abs(base_idx) <= len(rdf):
+                    curr_rev = rdf.iloc[idx]["revenue"]
+                    base_rev = rdf.iloc[base_idx]["revenue"]
+                    if base_rev > 0:
+                        yoy_list.append((curr_rev / base_rev - 1) * 100)
+
+            if len(yoy_list) == 3:
+                # yoy_list[0] = 最近月, yoy_list[2] = 3個月前
+                # 加速 = 每月 YoY 都比上月高
+                accelerating = yoy_list[0] > yoy_list[1] > yoy_list[2]
+                decelerating = yoy_list[0] < yoy_list[1] < yoy_list[2]
+                accel_delta = yoy_list[0] - yoy_list[2]
+
+                if accelerating and accel_delta > 5:
+                    details.append(f"🚀 營收 YoY 連續加速（{yoy_list[2]:+.1f}% → {yoy_list[1]:+.1f}% → {yoy_list[0]:+.1f}%）")
+                    score += 1.0
+                elif accelerating:
+                    details.append(f"✓ 營收 YoY 緩步加速（{yoy_list[2]:+.1f}% → {yoy_list[0]:+.1f}%）")
+                    score += 0.5
+                elif decelerating and accel_delta < -10:
+                    details.append(f"⚠ 營收 YoY 連續減速（{yoy_list[2]:+.1f}% → {yoy_list[0]:+.1f}%）")
+                    score -= 1.0
+                elif decelerating:
+                    details.append(f"— 營收 YoY 略為減速（{yoy_list[2]:+.1f}% → {yoy_list[0]:+.1f}%）")
+                    score -= 0.5
     else:
         details.append("⚠ 無法取得營收資料")
 

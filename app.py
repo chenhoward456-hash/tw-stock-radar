@@ -820,6 +820,15 @@ elif page == "📡 觀察清單掃描":
         except Exception:
             _scan_macro_mult = 1.0
 
+        # [R6] 取得產業輪動資料
+        _sector_rs = {}
+        try:
+            _rotation = sector_rotation.detect_rotation()
+            for _rot in _rotation:
+                _sector_rs[_rot["sector"]] = _rot.get("rs_label", "同步大盤")
+        except Exception:
+            pass
+
         def _scan_one(stock_id):
             """單一股票掃描（在線程中執行）"""
             sname = names.get(stock_id, stock_id)
@@ -845,10 +854,14 @@ elif page == "📡 觀察清單掃描":
             except Exception:
                 news_score = 5.0
 
+            # [R6] 產業輪動 bonus
+            _sr_label = _sector_rs.get(stock_sectors.get(stock_id, ""), None)
+
             avg, _ = weighted_score(
                 tech["score"], fund["score"], inst_result["score"], news_score, strategy_key,
                 is_us=market.is_us(stock_id),
                 macro_multiplier=_scan_macro_mult,
+                sector_rs_label=_sr_label,
             )
             signal = overall_signal(avg)
 
@@ -906,7 +919,17 @@ elif page == "📡 觀察清單掃描":
         progress.empty()
 
         if results:
+            # [R6] 計算相對強度排名
+            from ranking import rank_by_relative_strength
+            rank_by_relative_strength(results)
+
             df = pd.DataFrame(results).sort_values("短線", ascending=False)
+
+            # [R6] 加入 RS 欄位到顯示
+            if "rs_score" in df.columns:
+                df["動量RS"] = df["rs_score"].apply(lambda x: f"{x:.0f}" if x and x > 0 else "—")
+            if "rs_label" in df.columns:
+                df["強弱"] = df["rs_label"]
 
             _green_th = st.session_state.get("green_threshold", 7.0)
             # 短線綠燈
@@ -914,18 +937,29 @@ elif page == "📡 觀察清單掃描":
             watch = df[(df["短線"] >= _green_th - 1) & (df["短線"] < _green_th)]
             reds = df[df["短線"] < 4]
 
+            # [R6] 精選：綠燈 + RS 前半段
+            elite = greens[greens["rs_score"].fillna(0) >= 50] if "rs_score" in df.columns else greens.head(0)
+            normal_greens = greens[~greens.index.isin(elite.index)] if not elite.empty else greens
+
             # 長線佈局機會（短線低但長線高 = 逢低佈局）
             long_opps = df[(df["長線"] >= _green_th) & (df["短線"] < _green_th)].sort_values("長線", ascending=False)
 
             # 短線綠燈但長線低 = 矛盾警告
             contradictions = df[(df["短線"] >= _green_th) & (df["長線"] <= 5)]
 
-            if not greens.empty:
-                st.success(f"🟢 短線綠燈（{len(greens)} 檔）")
-                st.dataframe(greens, use_container_width=True, hide_index=True, height=400)
+            if not elite.empty:
+                st.success(f"🏆 精選候選（綠燈 + 動量強，{len(elite)} 檔）")
+                st.dataframe(elite, use_container_width=True, hide_index=True, height=400)
+
+            if not normal_greens.empty:
+                st.success(f"🟢 短線綠燈（{len(normal_greens)} 檔{'，動量偏弱宜等拉回' if not elite.empty else ''}）")
+                st.dataframe(normal_greens, use_container_width=True, hide_index=True, height=400)
 
                 if not contradictions.empty:
                     st.warning(f"⚠ 其中 {len(contradictions)} 檔短線強但長線弱（基本面撐不久）：{', '.join(contradictions['代號'].tolist())}")
+
+            if greens.empty:
+                st.info("💡 目前沒有綠燈候選人（需 7 分以上），建議耐心等待。")
 
             if not long_opps.empty:
                 st.info(f"📉 長線佈局機會（{len(long_opps)} 檔）— 短線弱但基本面好，逢低佈局")
