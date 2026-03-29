@@ -1198,20 +1198,29 @@ elif page == "💼 持倉監控":
     if not HOLDINGS:
         st.info("還沒有持倉，用上面的表單新增吧。")
     else:
-        if st.button("檢查持倉", type="primary", use_container_width=True):
+        # [R6] 快取持倉檢查結果（5 分鐘內不重複打 API）
+        @st.cache_data(ttl=300)
+        def _cached_check(stock_id, buy_price, shares, strategy, stop_loss, buy_date):
             from monitor import check_holding
+            h = {"stock_id": stock_id, "buy_price": buy_price, "shares": shares,
+                 "strategy": strategy, "stop_loss": stop_loss, "buy_date": buy_date}
+            return check_holding(h)
 
+        if st.button("檢查持倉", type="primary", use_container_width=True):
             progress = st.progress(0, text="檢查中...")
             results = []
 
             for i, h in enumerate(HOLDINGS):
                 progress.progress((i + 1) / len(HOLDINGS), text=f"檢查 {h['stock_id']}...")
                 try:
-                    r = check_holding(h)
+                    r = _cached_check(
+                        h["stock_id"], h["buy_price"], h["shares"],
+                        h.get("strategy", "longterm"), h.get("stop_loss", 0),
+                        h.get("buy_date", ""),
+                    )
                     results.append(r)
                 except Exception:
                     pass
-                time.sleep(0.3)
 
             progress.empty()
 

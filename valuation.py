@@ -18,9 +18,11 @@ import pandas as pd
 import numpy as np
 
 
-def analyze_longterm(per_df, revenue_df, price_df, industry_category=""):
+def analyze_longterm(per_df, revenue_df, price_df, industry_category="",
+                     macro_multiplier=1.0):
     """
     長線佈局評分
+    [R6] 加入 macro_multiplier，跟短線策略一致
     回傳：{"signal": "green/yellow/red", "score": float, "details": list}
     """
     result = {"signal": "yellow", "score": 5, "details": []}
@@ -57,6 +59,11 @@ def analyze_longterm(per_df, revenue_df, price_df, industry_category=""):
     if data_sources < 2:
         score = min(score, 6.0)  # 資料不足不給綠燈
         details.append(f"⚠ 資料來源不足（{data_sources}/3），長線評分受限")
+
+    # ===== [R6] 總體經濟調整（跟短線一致）=====
+    if macro_multiplier < 1.0:
+        score = score * macro_multiplier
+        details.append(f"⚠ 總體環境調整 ×{macro_multiplier}")
 
     # ===== 結算 =====
     score = max(1.0, min(10.0, score))

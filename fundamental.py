@@ -84,10 +84,10 @@ def analyze_etf(price_df, etf_info=None, per_df=None):
         if not dy_valid.empty:
             dy = float(dy_valid.iloc[-1])
 
-    # [R6] 異常值保護：殖利率不可能超過 30%，超過就是資料錯誤
-    if dy > 30:
-        details.append(f"⚠ 殖利率資料異常（{dy:.1f}%），可能因分割或資料源錯誤，忽略")
-        dy = 0
+    # [R6] 異常值保護：殖利率超過 15% 極罕見，cap 住並標記
+    if dy > 15:
+        details.append(f"⚠ 殖利率 {dy:.1f}% 異常偏高（可能因分割），以 15% 計算")
+        dy = 15.0
 
     if dy > 0:
         if dy > 6:
