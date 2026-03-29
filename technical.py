@@ -151,22 +151,24 @@ def _resample_weekly(df):
 
 def _weekly_trend(price_df):
     """
-    週線趨勢判斷：MA5 vs MA20（週線），回傳方向和信心度
+    週線趨勢判斷：MA5 vs MA10（週線），回傳方向和信心度
+    [R6] 從 MA20 改為 MA10（週線 MA10 ≈ 日線 MA50，仍是有效的中期趨勢指標）
+    這樣只需 12 週資料（≈84 天），不會因為預設抓 150 天而不夠用
     回傳：{"trend": "bullish/bearish/neutral", "strength": float, "detail": str}
     """
     wdf = _resample_weekly(price_df)
-    if wdf.empty or len(wdf) < 22:
+    if wdf.empty or len(wdf) < 12:
         return {"trend": "neutral", "strength": 0, "detail": "週線資料不足"}
 
     close = wdf["close"].astype(float)
     ma5w = close.rolling(5).mean()
-    ma20w = close.rolling(20).mean()
+    ma10w = close.rolling(10).mean()
 
-    if ma5w.iloc[-1] is None or ma20w.iloc[-1] is None:
+    if pd.isna(ma5w.iloc[-1]) or pd.isna(ma10w.iloc[-1]):
         return {"trend": "neutral", "strength": 0, "detail": "週線均線資料不足"}
 
     curr_ma5 = ma5w.iloc[-1]
-    curr_ma20 = ma20w.iloc[-1]
+    curr_ma20 = ma10w.iloc[-1]  # 變數名保持 ma20 避免改太多下游
     curr_close = close.iloc[-1]
 
     # 週線 RSI

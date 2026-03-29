@@ -132,6 +132,18 @@ with st.sidebar.expander("⚙ 進階設定"):
         help="綜合分數 >= 此值 = 綠燈，預設 7",
     )
 
+    # [R6] TOTAL_BUDGET UI 設定
+    if "user_budget" not in st.session_state:
+        st.session_state.user_budget = TOTAL_BUDGET if TOTAL_BUDGET > 0 else 0
+    _new_budget = st.number_input(
+        "投資總預算（元）",
+        min_value=0, max_value=100_000_000, step=10000,
+        value=st.session_state.user_budget,
+        help="用於倉位計算和風險控管。設 0 = 不啟用倉位建議。",
+    )
+    if _new_budget != st.session_state.user_budget:
+        st.session_state.user_budget = _new_budget
+
 from config import FINMIND_TOKEN
 if not FINMIND_TOKEN:
     st.sidebar.warning("台股資料限速中（未設 FinMind Token）。到 config.py 填入免費 Token 可提升 10 倍速度。")
@@ -526,10 +538,15 @@ elif page == "🔍 個股分析":
         if ind:
             st.caption(f"產業：{ind} ｜ 策略：{strategy_info['label']}")
 
-        # 評分區 — 一目了然的結論
+        # 評分區 — 三段式顯示（原始→調整→最終）
+        _raw_score = round(avg / _macro_multiplier, 1) if _macro_multiplier < 1.0 and _macro_multiplier > 0 else avg
         st.markdown(f"## {SIGNAL_EMOJI[signal]} {avg}/10")
         if _macro_multiplier < 0.95:
-            st.caption(f"⚠ 總體環境偏差，評分已乘以 {_macro_multiplier}（原始 {round(avg / _macro_multiplier, 1)}）")
+            st.caption(f"原始分 {_raw_score} × 環境 {_macro_multiplier} = **最終 {avg}**（環境偏差自動降級）")
+        # R6 bonuses
+        _r6b = strategy_info.get("r6_bonuses")
+        if _r6b:
+            st.caption(f"加分項：{'、'.join(_r6b)}")
 
         if avg >= 7:
             st.success("各面向條件良好，可以考慮開始建倉（先買一部分就好）。")
@@ -633,8 +650,18 @@ elif page == "🔍 個股分析":
                 st.markdown("### 近 60 日走勢")
                 st.line_chart(chart_df["close"])
 
-        # 四面向
+        # 四面向（含資料截止日）
         st.markdown("### 四面向分析")
+        # 取得各面向資料日期
+        _tech_date = price_df["date"].iloc[-1] if not price_df.empty else "N/A"
+        _fund_date = per_df.sort_values("date")["date"].iloc[-1] if not per_df.empty and "date" in per_df.columns else "N/A"
+        _inst_date = inst_df.sort_values("date")["date"].iloc[-1] if not inst_df.empty and "date" in inst_df.columns else "N/A"
+        _data_dates = {
+            "技術面": str(_tech_date)[:10],
+            "基本面": str(_fund_date)[:10],
+            "籌碼面": str(_inst_date)[:10],
+            "消息面": "即時",
+        }
         sections = [
             ("技術面", tech),
             ("基本面", fund),
@@ -647,6 +674,7 @@ elif page == "🔍 個股分析":
                 emoji = SIGNAL_EMOJI[data["signal"]]
                 st.markdown(f"**{emoji} {label}**")
                 st.markdown(f"### {data['score']}/10")
+                st.caption(f"📅 {_data_dates[label]}")
                 for d in data["details"]:
                     if d.strip():
                         st.caption(d)
@@ -797,6 +825,11 @@ elif page == "🔍 個股分析":
 # ===== 觀察清單掃描 =====
 elif page == "📡 觀察清單掃描":
     st.title("📡 觀察清單掃描")
+
+    # [R6] 掃描前預覽
+    _preview_count = sum(len(codes) for codes in WATCHLIST.values())
+    _preview_sectors = len(WATCHLIST)
+    st.caption(f"目前觀察清單：{_preview_count} 檔股票，{_preview_sectors} 個板塊（來自 watchlist.py）")
 
     if st.button("開始掃描", type="primary", use_container_width=True):
         from concurrent.futures import ThreadPoolExecutor, as_completed
