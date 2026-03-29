@@ -44,6 +44,20 @@ def analyze_longterm(per_df, revenue_df, price_df, industry_category=""):
     position_score = _score_price_position(price_df, details)
     score += position_score
 
+    # ===== [R6] 資料完整度懲罰 =====
+    # 如果營收、PE、價格資料不足，不該給高分
+    data_sources = 0
+    if not revenue_df.empty and "revenue" in revenue_df.columns and len(revenue_df) >= 4:
+        data_sources += 1
+    if not per_df.empty and "PER" in per_df.columns:
+        data_sources += 1
+    if not price_df.empty and "close" in price_df.columns and len(price_df) >= 60:
+        data_sources += 1
+
+    if data_sources < 2:
+        score = min(score, 6.0)  # 資料不足不給綠燈
+        details.append(f"⚠ 資料來源不足（{data_sources}/3），長線評分受限")
+
     # ===== 結算 =====
     score = max(1.0, min(10.0, score))
     if score >= 7:
@@ -86,10 +100,10 @@ def _score_revenue_trend(revenue_df, details):
 
         if yoy > 20:
             details.append(f"✓ 營收年增 {yoy:+.1f}%（強勁成長）")
-            adj += 2.5
+            adj += 2.0
         elif yoy > 10:
             details.append(f"✓ 營收年增 {yoy:+.1f}%（穩定成長）")
-            adj += 1.5
+            adj += 1.0
         elif yoy > 0:
             details.append(f"✓ 營收年增 {yoy:+.1f}%（微幅成長）")
             adj += 0.5
@@ -289,10 +303,10 @@ def _score_price_position(price_df, details):
 
     if position < 20:
         details.append(f"✓ 股價在 52 週低點附近（位置 {position:.0f}%），長線有吸引力")
-        adj += 2
+        adj += 1.5
     elif position < 35:
         details.append(f"✓ 股價偏低（52 週位置 {position:.0f}%），可能是佈局機會")
-        adj += 1
+        adj += 0.5
     elif position > 90:
         details.append(f"⚠ 接近 52 週高點（位置 {position:.0f}%），長線追高風險大")
         adj -= 1.5
