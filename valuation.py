@@ -24,7 +24,7 @@ def analyze_longterm(per_df, revenue_df, price_df, industry_category=""):
     回傳：{"signal": "green/yellow/red", "score": float, "details": list}
     """
     result = {"signal": "yellow", "score": 5, "details": []}
-    score = 5.0
+    score = 3.0  # [R6] 基底降到 3，每一分都要靠資料賺，避免 69 檔全滿分
     details = []
     details.append("— 長線佈局評估（不看短期漲跌）")
 
@@ -234,6 +234,11 @@ def _score_dividend(per_df, revenue_df, details):
         return 0
 
     current_dy = dy_valid.iloc[-1]
+
+    # [R6] 異常值保護
+    if current_dy > 30:
+        return 0
+
     adj = 0
 
     if current_dy > 6:
