@@ -411,26 +411,39 @@ def format_message(results):
 
                     pnl_pct = (cp / buy_price - 1) * 100 if buy_price > 0 else 0
 
-                    # 判斷動作
+                    # 判斷動作（依策略不同給不同建議）
+                    below_ma60 = ma60 and cp and cp < ma60
+                    above_ma20 = ma20 and cp and cp > ma20
+                    above_ma60 = ma60 and cp and cp > ma60
+
                     if strategy == "hold":
-                        # 0050 桶1：不賣，只看趨勢
+                        # 桶1 0050：永遠不賣
                         lines.append(f"  {sid} {name}：{pnl_pct:+.1f}% — 桶1 持續定額，不動")
-                    elif ma60 and cp and cp < ma60:
-                        # 跌破 MA60 → 出場
-                        lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60！建議出場")
-                    elif buy_price > 0 and cp > 0:
-                        # 檢查回撤
-                        peak = h.get("peak_price", cp)
-                        if peak > 0 and (cp / peak - 1) < -0.15:
-                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — 從高點回撤超過 15%，考慮出場")
-                        elif ma20 and cp > ma20 and ma60 and cp > ma60:
+
+                    elif strategy == "short":
+                        # 桶2 短線：嚴格 MA60 出場
+                        if below_ma60:
+                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場")
+                        elif above_ma20 and above_ma60:
                             lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱")
-                        elif ma60 and cp > ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — 在 MA60 之上，持有")
+                        elif above_ma60:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有")
                         else:
                             lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%")
+
                     else:
-                        lines.append(f"  — {sid} {name}：資料不足")
+                        # 桶3 長線 / longterm：寬鬆標準
+                        # 長線不只看 MA60，要看基本面有沒有壞
+                        if below_ma60 and pnl_pct < -25:
+                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60 且虧損大，評估是否停損")
+                        elif below_ma60:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — 在 MA60 下方，觀察基本面是否仍在")
+                        elif above_ma20 and above_ma60:
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常")
+                        elif above_ma60:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有")
+                        else:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%")
                 except Exception:
                     lines.append(f"  — {sid}：無法取得資料")
             lines.append("")
