@@ -207,113 +207,39 @@ def check_0050_regime():
 
 
 def format_message(results):
-    """格式化通知訊息"""
+    """格式化通知訊息（R6 統一版：三桶建議 = 下面清單，同一套邏輯）"""
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     lines = [f"投資雷達掃描 ({now})", ""]
 
-    # ===== 總體經濟環境（新增）=====
+    # ===== Step 1: 先算完所有資料 =====
+
+    # 總體經濟
+    _macro_score = 5
+    _macro_mult = 1.0
+    _fg = 50
     try:
         import macro as _macro
         _macro_data = _macro.analyze()
         _macro_score = _macro_data["score"]
         _macro_mult = _macro_data["risk_multiplier"]
-        if _macro_data["signal"] == "red":
-            lines.append(f"🚨 總體環境警報 — 環境分 {_macro_score}/10")
-            lines.append(f"  個股評分自動降級（×{_macro_mult}）")
-            lines.append("")
-        elif _macro_mult < 0.95:
-            lines.append(f"⚠ 總體環境偏弱 — 環境分 {_macro_score}/10（×{_macro_mult}）")
-            lines.append("")
+        _fg = _macro_data.get("fear_greed_index", 50)
     except Exception:
         pass
 
-    # ===== 0050 多空燈號（最重要，放最上面）=====
-    regime, regime_msg = check_0050_regime()
-    if regime == "bear":
-        lines.append("🚨🚨🚨 0050 空頭警報 🚨🚨🚨")
-        lines.append(regime_msg)
-        lines.append("→ 建議暫停定期定額，考慮減碼")
-        lines.append("")
-    elif regime == "warning":
-        lines.append("⚠ 0050 多空轉換注意")
-        lines.append(regime_msg)
-        lines.append("→ 留意後續發展，準備應變")
-        lines.append("")
-    elif regime == "bull":
-        lines.append("✅ 0050 多頭確認")
-        lines.append(regime_msg)
-        lines.append("→ 安心定期定額，不用動")
-        lines.append("")
-    # bull_mild 和 neutral 不特別提示，減少噪音
-
-    # ===== [R6] 三桶策略操作建議 =====
+    # 0050 技術面
+    _0050_price, _0050_ma20, _0050_ma60 = 0, 0, 0
     try:
-        lines.append("━━━ 三桶操作建議 ━━━")
-        lines.append("")
-
-        # 桶1：看 0050 的 MA20 vs MA60
         _0050_df = market.fetch_stock_price("0050", days=150)
         _0050_tech = technical.analyze(_0050_df)
         _0050_price = _0050_tech.get("current_price", 0)
         _0050_ma20 = _0050_tech.get("ma20", 0)
         _0050_ma60 = _0050_tech.get("ma60", 0)
-        _0050_adx = _0050_tech.get("adx")
-
-        # 桶1 判斷
-        if _0050_ma20 and _0050_ma60 and _0050_price:
-            if _0050_price < _0050_ma60:
-                lines.append("桶1 0050：⚠ 跌破 MA60，縮到 5,000 存戰備金")
-            elif _0050_price <= _0050_ma20 * 1.02 and _0050_price > _0050_ma60:
-                lines.append("桶1 0050：✓ 拉回 MA20 但趨勢在，正常 7,000（有戰備金可加碼）")
-            elif _0050_ma20 > _0050_ma60:
-                lines.append("桶1 0050：✓ 趨勢正常，照買 7,000")
-            else:
-                lines.append("桶1 0050：— 觀望，照買 7,000")
-        else:
-            lines.append("桶1 0050：照買 7,000（資料不足無法判斷）")
-
-        # 桶2：找短線動量候選
-        _b2_picks = []
-        for r in results:
-            sid = r.get("stock_id", "")
-            if market.is_etf(sid):
-                continue
-            try:
-                _s_df = market.fetch_stock_price(sid, days=150)
-                _s_tech = technical.analyze(_s_df)
-                _s_adx = _s_tech.get("adx")
-                _s_rsi = _s_tech.get("rsi", 50)
-                _s_price = _s_tech.get("current_price", 0)
-                _s_ma5 = _s_tech.get("ma5")
-                _s_ma20 = _s_tech.get("ma20", 0)
-                _s_ma60 = _s_tech.get("ma60", 0)
-                if (_s_ma5 and _s_ma20 and _s_ma60 and _s_adx
-                        and _s_ma5 > _s_ma20 > _s_ma60
-                        and _s_adx > 20
-                        and 40 <= (_s_rsi or 50) <= 70
-                        and _s_price <= _s_ma20 * 1.05):
-                    _b2_picks.append(f"{sid} {r.get('name', '')}（ADX {_s_adx:.0f}）")
-            except Exception:
-                continue
-
-        if _b2_picks:
-            lines.append(f"桶2 短線：✓ 有候選！{' / '.join(_b2_picks[:3])}")
-            lines.append(f"  → 選 RS 最高的那檔，一次投入累積現金")
-        else:
-            lines.append("桶2 短線：— 沒有符合條件的，4,000 繼續存")
-
-        # 桶3：直接用下面「長線佈局機會」的結果，不另外掃描
-        # （等 long_score 算完後再填入，先佔位）
-        _b3_placeholder_idx = len(lines)
-        lines.append("桶3 逢低：（計算中）")
-
-        lines.append("")
     except Exception:
         pass
 
-    # 幫每檔算長線分數
+    # 長線分數
     try:
         import valuation
         for r in results:
@@ -333,82 +259,125 @@ def format_message(results):
     except Exception:
         pass
 
-    # [R6] 計算 RS 排名
+    # RS 排名
     try:
         from ranking import rank_by_relative_strength
         rank_by_relative_strength(results)
     except Exception:
         pass
 
-    # [R6] 動態策略建議
-    try:
-        _fg = _macro_data.get("fear_greed_index", 50) if '_macro_data' in dir() else 50
-        _ms = _macro_data.get("score", 5) if '_macro_data' in dir() else 5
-        _regime = suggest_regime_strategy(_fg, _ms)
-        lines.append(f"📊 {_regime['reason']}")
-        lines.append("")
-    except Exception:
-        pass
+    # ===== Step 2: 建立統一清單 =====
 
     greens = [r for r in results if r["avg"] >= 7]
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
     reds = [r for r in results if r["avg"] < 4]
 
-    # [R6] 分級：精選 vs 普通綠燈
-    elite = [r for r in greens if r.get("rs_score", 0) >= 50]
-    normal_greens = [r for r in greens if r.get("rs_score", 0) < 50]
+    # 桶2 候選 = 綠燈 + RS 強（精選）
+    b2_picks = sorted(
+        [r for r in greens if r.get("rs_score", 0) >= 50],
+        key=lambda x: x.get("rs_score", 0), reverse=True
+    )
 
-    if elite:
-        lines.append(f"🏆 精選候選（綠燈+動量強，{len(elite)} 檔）：")
-        for r in elite:
-            ls = r.get("long_score", 0)
-            rs = r.get("rs_score", 0)
-            lines.append(f"  🏆 {r['stock_id']} {r['name']} 短{r['avg']}/長{ls} RS{rs:.0f}")
+    # 桶3 候選 = 長線分高 + 短線低（逢低佈局）
+    b3_picks = sorted(
+        [r for r in results if r.get("long_score", 0) >= 7 and r["avg"] < 7],
+        key=lambda x: x.get("long_score", 0), reverse=True
+    )
+
+    # ===== Step 3: 組裝訊息 =====
+
+    # 環境警報
+    if _macro_score <= 3:
+        lines.append(f"🚨 環境分 {_macro_score}/10 — 防禦模式")
+    elif _macro_mult < 0.95:
+        lines.append(f"⚠ 環境偏弱（{_macro_score}/10）")
+    lines.append("")
+
+    # 0050 狀態
+    regime, regime_msg = check_0050_regime()
+    if regime == "bear":
+        lines.append("🚨 0050 空頭 — 桶1 縮減")
+    elif regime == "warning":
+        lines.append("⚠ 0050 轉弱中")
+    elif regime == "bull":
+        lines.append("✅ 0050 多頭")
+    if regime_msg:
+        lines.append(regime_msg)
+    lines.append("")
+
+    # ━━━ 三桶操作建議（核心，往下的清單就是這裡的展開）━━━
+    lines.append("━━━ 三桶操作建議 ━━━")
+    lines.append("")
+
+    # 桶1
+    if _0050_ma20 and _0050_ma60 and _0050_price:
+        if _0050_price < _0050_ma60:
+            lines.append("桶1 0050：⚠ 跌破 MA60，縮到 5,000 存戰備金")
+        elif _0050_price <= _0050_ma20 * 1.02 and _0050_price > _0050_ma60:
+            lines.append("桶1 0050：✓ 拉回 MA20，正常 7,000（可用戰備金加碼）")
+        elif _0050_ma20 > _0050_ma60:
+            lines.append("桶1 0050：✓ 趨勢正常，照買 7,000")
+        else:
+            lines.append("桶1 0050：— 照買 7,000")
+    else:
+        lines.append("桶1 0050：照買 7,000")
+
+    # 桶2（= 精選清單）
+    if b2_picks:
+        top = b2_picks[:3]
+        names = " / ".join(f"{r['stock_id']} {r['name']}" for r in top)
+        lines.append(f"桶2 短線：✓ {names}")
+        lines.append(f"  → 選最強的一檔，一次投入")
+    else:
+        lines.append("桶2 短線：— 沒有精選候選，4,000 繼續存")
+
+    # 桶3（= 長線佈局清單）
+    if b3_picks:
+        top = b3_picks[:3]
+        names = " / ".join(f"{r['stock_id']} {r['name']}（長{r.get('long_score',0)}）" for r in top)
+        lines.append(f"桶3 逢低：✓ {names}")
+        lines.append(f"  → 基本面好+股價低，可以進場")
+    else:
+        lines.append("桶3 逢低：— 沒有佈局機會，4,000 繼續存")
+
+    lines.append("")
+
+    # ━━━ 展開清單（跟上面三桶是同一批資料）━━━
+
+    # 桶2 展開：精選 + 其他綠燈
+    if b2_picks:
+        lines.append(f"🏆 桶2 精選（{len(b2_picks)} 檔）：")
+        for r in b2_picks:
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']} RS{r.get('rs_score',0):.0f}")
         lines.append("")
 
-    if normal_greens:
-        lines.append(f"🟢 綠燈（{len(normal_greens)} 檔，動量偏弱宜等拉回）：")
-        for r in normal_greens:
-            ls = r.get("long_score", 0)
-            if ls <= 5:
-                lines.append(f"  ⚠ {r['stock_id']} {r['name']} 短{r['avg']}/長{ls} ← 長線弱，別追")
-            else:
-                lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{ls}")
+    other_greens = [r for r in greens if r not in b2_picks]
+    if other_greens:
+        lines.append(f"🟢 其他綠燈（{len(other_greens)} 檔，動量偏弱等拉回）：")
+        for r in other_greens[:5]:
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}")
         lines.append("")
 
     if not greens:
         lines.append("💡 今天沒有綠燈股，耐心等待。")
         lines.append("")
 
-    if watchlist:
-        lines.append(f"🟡 值得關注（{len(watchlist)} 檔）：")
-        for r in watchlist[:5]:
-            lines.append(f"  {r['stock_id']} {r['name']} ({r['avg']}/10)")
-        if len(watchlist) > 5:
-            lines.append(f"  ...還有 {len(watchlist) - 5} 檔")
+    # 桶3 展開：長線佈局
+    if b3_picks:
+        lines.append(f"📉 桶3 佈局（{len(b3_picks)} 檔）：")
+        for r in b3_picks[:5]:
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{r.get('long_score',0)}")
+        if len(b3_picks) > 5:
+            lines.append(f"  ...還有 {len(b3_picks) - 5} 檔")
         lines.append("")
 
-    # 長線佈局機會
-    long_opps = [r for r in results if r.get("long_score", 0) >= 7 and r["avg"] < 7]
-    if long_opps:
-        long_opps.sort(key=lambda x: x.get("long_score", 0), reverse=True)
-
-    # [R6] 回填桶3 建議（用跟下面「長線佈局機會」同一份清單）
-    try:
-        if long_opps and _b3_placeholder_idx < len(lines):
-            top3 = [f"{r['stock_id']} {r['name']}（長{r.get('long_score',0)}）" for r in long_opps[:3]]
-            lines[_b3_placeholder_idx] = f"桶3 逢低：✓ 有候選！{' / '.join(top3)}"
-        elif _b3_placeholder_idx < len(lines):
-            lines[_b3_placeholder_idx] = "桶3 逢低：— 目前沒有長線佈局機會，4,000 繼續存"
-    except Exception:
-        pass
-
-    if long_opps:
-        lines.append(f"📉 長線佈局機會（{len(long_opps)} 檔）：")
-        for r in long_opps[:5]:
-            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{r.get('long_score',0)}")
-        if len(long_opps) > 5:
-            lines.append(f"  ...還有 {len(long_opps) - 5} 檔")
+    # 觀察 + 偏空
+    if watchlist:
+        lines.append(f"🟡 觀察（{len(watchlist)} 檔）：")
+        for r in watchlist[:3]:
+            lines.append(f"  {r['stock_id']} {r['name']} ({r['avg']}/10)")
+        if len(watchlist) > 3:
+            lines.append(f"  ...還有 {len(watchlist) - 3} 檔")
         lines.append("")
 
     if reds:
