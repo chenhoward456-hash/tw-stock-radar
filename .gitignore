@@ -2,5 +2,5 @@ __pycache__/
 *.pyc
 .env
 .streamlit/secrets.toml
-holdings.py
+# holdings.py  # 取消忽略，讓 GitHub Actions 能讀到持倉推播狀態
 data/cache/
