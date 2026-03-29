@@ -304,31 +304,10 @@ def format_message(results):
         else:
             lines.append("桶2 短線：— 沒有符合條件的，4,000 繼續存")
 
-        # 桶3：找逢低佈局候選
-        _b3_picks = []
-        for r in results:
-            sid = r.get("stock_id", "")
-            if market.is_etf(sid):
-                continue
-            try:
-                _s_df = market.fetch_stock_price(sid, days=150)
-                _s_tech = technical.analyze(_s_df)
-                _s_price = _s_tech.get("current_price", 0)
-                _s_ma20 = _s_tech.get("ma20", 0)
-                _s_ma60 = _s_tech.get("ma60", 0)
-                if (_s_ma20 and _s_ma60 and _s_price
-                        and _s_price <= _s_ma20
-                        and _s_ma20 > _s_ma60
-                        and r.get("fund", 0) >= 5):
-                    _b3_picks.append(f"{sid} {r.get('name', '')}（基本面 {r.get('fund', 0)}）")
-            except Exception:
-                continue
-
-        if _b3_picks:
-            lines.append(f"桶3 逢低：✓ 有候選！{' / '.join(_b3_picks[:3])}")
-            lines.append(f"  → 拉回到 MA20 的好股，可以進場")
-        else:
-            lines.append("桶3 逢低：— 沒有拉回的好股，4,000 繼續存")
+        # 桶3：直接用下面「長線佈局機會」的結果，不另外掃描
+        # （等 long_score 算完後再填入，先佔位）
+        _b3_placeholder_idx = len(lines)
+        lines.append("桶3 逢低：（計算中）")
 
         lines.append("")
     except Exception:
@@ -413,6 +392,18 @@ def format_message(results):
     long_opps = [r for r in results if r.get("long_score", 0) >= 7 and r["avg"] < 7]
     if long_opps:
         long_opps.sort(key=lambda x: x.get("long_score", 0), reverse=True)
+
+    # [R6] 回填桶3 建議（用跟下面「長線佈局機會」同一份清單）
+    try:
+        if long_opps and _b3_placeholder_idx < len(lines):
+            top3 = [f"{r['stock_id']} {r['name']}（長{r.get('long_score',0)}）" for r in long_opps[:3]]
+            lines[_b3_placeholder_idx] = f"桶3 逢低：✓ 有候選！{' / '.join(top3)}"
+        elif _b3_placeholder_idx < len(lines):
+            lines[_b3_placeholder_idx] = "桶3 逢低：— 目前沒有長線佈局機會，4,000 繼續存"
+    except Exception:
+        pass
+
+    if long_opps:
         lines.append(f"📉 長線佈局機會（{len(long_opps)} 檔）：")
         for r in long_opps[:5]:
             lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{r.get('long_score',0)}")
