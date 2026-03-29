@@ -386,7 +386,7 @@ def format_message(results):
             lines.append(f"  {r['stock_id']} {r['name']} ({r['avg']}/10)")
         lines.append("")
 
-    # ===== 持倉加倉提醒 =====
+    # ===== [R6] 持倉狀態（每天告訴你手上的股票要不要動）=====
     try:
         _vars = {}
         _hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
@@ -395,44 +395,45 @@ def format_message(results):
         _holdings = _vars.get("HOLDINGS", [])
 
         if _holdings:
-            import valuation
-            add_signals = []
+            lines.append("━━━ 你的持倉 ━━━")
+            lines.append("")
             for h in _holdings:
                 sid = h["stock_id"]
+                buy_price = h.get("buy_price", 0)
+                strategy = h.get("strategy", "longterm")
                 try:
-                    price_df = market.fetch_stock_price(sid)
-                    per_df = market.fetch_per_pbr(sid)
-                    rev_df = market.fetch_monthly_revenue(sid)
-                    ind = market.fetch_stock_industry(sid)
                     name = market.fetch_stock_name(sid)
-
-                    # 長線分數
-                    long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
-                    long_score = long_r["score"]
-
-                    # 消息面
-                    try:
-                        import news as _news
-                        news_r = _news.analyze(sid, name)
-                        news_score = news_r["score"]
-                    except Exception:
-                        news_score = 5
-
-                    # 技術面（看有沒有站回 20MA）
+                    price_df = market.fetch_stock_price(sid, days=150)
                     tech_r = technical.analyze(price_df)
-                    above_ma20 = tech_r.get("current_price", 0) > tech_r.get("ma20", 0) if tech_r.get("ma20") else False
+                    cp = tech_r.get("current_price", 0)
+                    ma60 = tech_r.get("ma60", 0)
+                    ma20 = tech_r.get("ma20", 0)
 
-                    # 三個條件都滿足
-                    if long_score >= 7 and news_score >= 5 and above_ma20:
-                        add_signals.append(f"  ✅ {sid} {name} 長線{long_score} 消息{news_score} 已站回20MA → 可考慮加倉")
+                    pnl_pct = (cp / buy_price - 1) * 100 if buy_price > 0 else 0
+
+                    # 判斷動作
+                    if strategy == "hold":
+                        # 0050 桶1：不賣，只看趨勢
+                        lines.append(f"  {sid} {name}：{pnl_pct:+.1f}% — 桶1 持續定額，不動")
+                    elif ma60 and cp and cp < ma60:
+                        # 跌破 MA60 → 出場
+                        lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60！建議出場")
+                    elif buy_price > 0 and cp > 0:
+                        # 檢查回撤
+                        peak = h.get("peak_price", cp)
+                        if peak > 0 and (cp / peak - 1) < -0.15:
+                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — 從高點回撤超過 15%，考慮出場")
+                        elif ma20 and cp > ma20 and ma60 and cp > ma60:
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱")
+                        elif ma60 and cp > ma60:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — 在 MA60 之上，持有")
+                        else:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%")
+                    else:
+                        lines.append(f"  — {sid} {name}：資料不足")
                 except Exception:
-                    pass
-
-            if add_signals:
-                lines.append("💰 持倉加倉機會：")
-                for s in add_signals:
-                    lines.append(s)
-                lines.append("")
+                    lines.append(f"  — {sid}：無法取得資料")
+            lines.append("")
     except Exception:
         pass
 
