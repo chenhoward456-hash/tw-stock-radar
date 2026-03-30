@@ -359,7 +359,7 @@ def format_message(results):
         lines.append("")
 
     if not greens:
-        lines.append("💡 今天沒有綠燈股，耐心等待。")
+        lines.append("💡 桶2 短線沒有候選（需綠燈+動量強），繼續存現金。")
         lines.append("")
 
     # 桶3 展開：長線佈局
@@ -432,12 +432,25 @@ def format_message(results):
                             lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%")
 
                     else:
-                        # 桶3 長線 / longterm：寬鬆標準
-                        # 長線不只看 MA60，要看基本面有沒有壞
-                        if below_ma60 and pnl_pct < -25:
-                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60 且虧損大，評估是否停損")
+                        # 桶3 長線 / longterm：直接查基本面給結論
+                        _fund_score = 5
+                        try:
+                            _h_per = market.fetch_per_pbr(sid)
+                            _h_rev = market.fetch_monthly_revenue(sid)
+                            _h_ind = market.fetch_stock_industry(sid)
+                            if market.is_etf(sid):
+                                _fund_score = fundamental.analyze_etf(price_df, None, _h_per).get("score", 5)
+                            else:
+                                _fund_score = fundamental.analyze(_h_per, _h_rev, _h_ind).get("score", 5)
+                        except Exception:
+                            pass
+
+                        if below_ma60 and _fund_score < 5 and pnl_pct < -20:
+                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — MA60 下 + 基本面轉弱（{_fund_score}分），考慮停損")
+                        elif below_ma60 and _fund_score >= 5:
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 下但基本面還行（{_fund_score}分），繼續觀察")
                         elif below_ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — 在 MA60 下方，觀察基本面是否仍在")
+                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — MA60 下，基本面 {_fund_score} 分")
                         elif above_ma20 and above_ma60:
                             lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常")
                         elif above_ma60:
