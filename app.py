@@ -318,7 +318,7 @@ if page == "🏠 今日焦點":
                     _per = market.fetch_per_pbr(sid)
                     _rev = market.fetch_monthly_revenue(sid)
                     _ind = market.fetch_stock_industry(sid)
-                    _long = valuation.analyze_longterm(_per, _rev, _p, _ind)
+                    _long = valuation.analyze_longterm(_per, _rev, _p, _ind, macro_multiplier=_macro_multiplier if '_macro_multiplier' in dir() else 1.0)
                     long_score = _long["score"]
 
                     if stop_warnings:
@@ -515,7 +515,7 @@ elif page == "🔍 個股分析":
                 fund = fundamental.analyze_etf(price_df, etf_info, per_df)
             elif strategy_key == "longterm":
                 # 長線佈局：用專用評估，不看短期漲跌
-                fund = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+                fund = valuation.analyze_longterm(per_df, rev_df, price_df, ind, macro_multiplier=_macro_multiplier if '_macro_multiplier' in dir() else 1.0)
             else:
                 fund = fundamental.analyze(per_df, rev_df, ind)
             inst = institutional.analyze(inst_df)
@@ -703,7 +703,7 @@ elif page == "🔍 個股分析":
 
         # 算長線分數
         if not etf and strategy_key != "longterm":
-            _long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+            _long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind, macro_multiplier=_macro_multiplier if '_macro_multiplier' in dir() else 1.0)
             _long_s = _long_r["score"]
         elif strategy_key == "longterm":
             _long_s = fund["score"]
@@ -733,7 +733,7 @@ elif page == "🔍 個股分析":
         for d in (fund["details"] if strategy_key != "longterm" else []):
             pass
         if strategy_key == "longterm" or not etf:
-            _lr = valuation.analyze_longterm(per_df, rev_df, price_df, ind) if strategy_key != "longterm" else {"details": fund.get("details", [])}
+            _lr = valuation.analyze_longterm(per_df, rev_df, price_df, ind, macro_multiplier=_macro_multiplier if '_macro_multiplier' in dir() else 1.0) if strategy_key != "longterm" else {"details": fund.get("details", [])}
             for d in _lr.get("details", []):
                 if "見頂" in d:
                     conclusions.append("⚠ **營收動能見頂**，高峰可能已過，小心追高。")
@@ -902,7 +902,7 @@ elif page == "📡 觀察清單掃描":
             if etf:
                 long_score = fund["score"]  # ETF 已經是專用評估
             else:
-                long_result = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+                long_result = valuation.analyze_longterm(per_df, rev_df, price_df, ind, macro_multiplier=_macro_multiplier if '_macro_multiplier' in dir() else 1.0)
                 long_score = long_result["score"]
 
             # [R5] Consensus Score

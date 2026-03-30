@@ -252,7 +252,10 @@ def format_message(results):
                 if market.is_etf(sid):
                     r["long_score"] = r.get("fund", 5)
                 else:
-                    long_r = valuation.analyze_longterm(per_df, rev_df, price_df, ind)
+                    long_r = valuation.analyze_longterm(
+                        per_df, rev_df, price_df, ind,
+                        macro_multiplier=_macro_mult,
+                    )
                     r["long_score"] = long_r["score"]
             except Exception:
                 r["long_score"] = 0
@@ -318,7 +321,7 @@ def format_message(results):
         elif _0050_ma20 > _0050_ma60:
             lines.append("桶1 0050：✓ 趨勢正常，照買 7,000")
         else:
-            lines.append("桶1 0050：— 照買 7,000")
+            lines.append("桶1 0050：⚠ 趨勢轉弱（MA20 < MA60），照買 7,000 但留意")
     else:
         lines.append("桶1 0050：照買 7,000")
 
@@ -456,7 +459,7 @@ def format_message(results):
                         elif above_ma60:
                             lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有")
                         else:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%（MA60 資料不足，無法判斷趨勢）")
                 except Exception:
                     lines.append(f"  — {sid}：無法取得資料")
             lines.append("")
