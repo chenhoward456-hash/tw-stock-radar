@@ -35,6 +35,7 @@ import fundamental
 import institutional
 import news as news_module
 from scoring import weighted_score, suggest_regime_strategy
+import streak
 
 
 SIGNAL_TEXT = {"green": "[綠燈]", "yellow": "[黃燈]", "red": "[紅燈]"}
@@ -275,15 +276,37 @@ def format_message(results):
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
     reds = [r for r in results if r["avg"] < 4]
 
-    # 桶2 候選 = 綠燈 + RS 強（精選）
+    # 連續訊號（桶2 用）
+    try:
+        streaks = streak.detect_streaks(min_streak=3)
+    except Exception:
+        streaks = {}
+
+    # 桶2 候選 = RS 強 或 連續 3 天綠燈
     b2_picks = sorted(
-        [r for r in greens if r.get("rs_score", 0) >= 50],
+        [r for r in greens
+         if r.get("rs_score", 0) >= 50
+         or (streaks.get(r["stock_id"], {}).get("type") == "green"
+             and streaks.get(r["stock_id"], {}).get("streak", 0) >= 3)],
         key=lambda x: x.get("rs_score", 0), reverse=True
     )
 
-    # 桶3 候選 = 長線分高 + 短線低（逢低佈局）
+    # 持倉股票 ID（桶3 排除用）
+    _holding_ids = set()
+    try:
+        _vars = {}
+        _hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+        with open(_hp, "r", encoding="utf-8") as _f:
+            exec(_f.read(), _vars)
+        _holding_ids = {h["stock_id"] for h in _vars.get("HOLDINGS", [])}
+    except Exception:
+        pass
+
+    # 桶3 候選 = 長線分高 + 短線低（排除已持倉）
     b3_picks = sorted(
-        [r for r in results if r.get("long_score", 0) >= 7 and r["avg"] < 7],
+        [r for r in results
+         if r.get("long_score", 0) >= 7 and r["avg"] < 7
+         and r["stock_id"] not in _holding_ids],
         key=lambda x: x.get("long_score", 0), reverse=True
     )
 
@@ -312,10 +335,13 @@ def format_message(results):
     lines.append("━━━ 三桶操作建議 ━━━")
     lines.append("")
 
-    # 桶1
+    # 桶1（環境分連動）
+    _defensive = _macro_score <= 3
     if _0050_ma20 and _0050_ma60 and _0050_price:
         if _0050_price < _0050_ma60:
             lines.append("桶1 0050：⚠ 跌破 MA60，縮到 5,000 存戰備金")
+        elif _defensive:
+            lines.append("桶1 0050：⚠ 環境差，縮到 5,000 存戰備金")
         elif _0050_price <= _0050_ma20 * 1.02 and _0050_price > _0050_ma60:
             lines.append("桶1 0050：✓ 拉回 MA20，正常 7,000（可用戰備金加碼）")
         elif _0050_ma20 > _0050_ma60:
@@ -325,8 +351,10 @@ def format_message(results):
     else:
         lines.append("桶1 0050：照買 7,000")
 
-    # 桶2（= 精選清單）
-    if b2_picks:
+    # 桶2（= 精選清單，環境差時暫停）
+    if _defensive:
+        lines.append("桶2 短線：⚠ 環境差，4,000 繼續存，不進場")
+    elif b2_picks:
         top = b2_picks[:3]
         names = " / ".join(f"{r['stock_id']} {r['name']}" for r in top)
         lines.append(f"桶2 短線：✓ {names}")
@@ -334,12 +362,16 @@ def format_message(results):
     else:
         lines.append("桶2 短線：— 沒有精選候選，4,000 繼續存")
 
-    # 桶3（= 長線佈局清單）
+    # 桶3（= 長線佈局清單，環境差時改觀察）
     if b3_picks:
         top = b3_picks[:3]
         names = " / ".join(f"{r['stock_id']} {r['name']}（長{r.get('long_score',0)}）" for r in top)
-        lines.append(f"桶3 逢低：✓ {names}")
-        lines.append(f"  → 基本面好+股價低，可以進場")
+        if _defensive:
+            lines.append(f"桶3 逢低：👀 {names}")
+            lines.append(f"  → 基本面好但環境差，先觀察不急進")
+        else:
+            lines.append(f"桶3 逢低：✓ {names}")
+            lines.append(f"  → 基本面好+股價低，可以進場")
     else:
         lines.append("桶3 逢低：— 沒有佈局機會，4,000 繼續存")
 
@@ -354,11 +386,20 @@ def format_message(results):
             lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']} RS{r.get('rs_score',0):.0f}")
         lines.append("")
 
+    # 連續天數（顯示用，含 min_streak=1 的所有綠燈）
+    try:
+        streaks_all = streak.detect_streaks(min_streak=1)
+    except Exception:
+        streaks_all = {}
+
     other_greens = [r for r in greens if r not in b2_picks]
     if other_greens:
         lines.append(f"🟢 其他綠燈（{len(other_greens)} 檔，動量偏弱等拉回）：")
         for r in other_greens[:5]:
-            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}")
+            sk = streaks_all.get(r["stock_id"], {})
+            days = sk.get("streak", 0) if sk.get("type") == "green" else 0
+            tag = f" 連{days}/3天" if days > 0 else ""
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}{tag}")
         lines.append("")
 
     if not greens:
@@ -403,6 +444,7 @@ def format_message(results):
             for h in _holdings:
                 sid = h["stock_id"]
                 buy_price = h.get("buy_price", 0)
+                stop_loss = h.get("stop_loss", 0)
                 strategy = h.get("strategy", "longterm")
                 try:
                     name = market.fetch_stock_name(sid)
@@ -413,6 +455,16 @@ def format_message(results):
                     ma20 = tech_r.get("ma20", 0)
 
                     pnl_pct = (cp / buy_price - 1) * 100 if buy_price > 0 else 0
+                    # 停損距離
+                    _sl_tag = ""
+                    if stop_loss and cp:
+                        sl_dist = (cp / stop_loss - 1) * 100
+                        if sl_dist <= 0:
+                            _sl_tag = f"｜🚨 已破停損 {stop_loss}"
+                        elif sl_dist <= 5:
+                            _sl_tag = f"｜⚠ 離停損 {sl_dist:.1f}%（{stop_loss}）"
+                        else:
+                            _sl_tag = f"｜停損 {stop_loss}"
 
                     # 判斷動作（依策略不同給不同建議）
                     below_ma60 = ma60 and cp and cp < ma60
@@ -426,13 +478,13 @@ def format_message(results):
                     elif strategy == "short":
                         # 桶2 短線：嚴格 MA60 出場
                         if below_ma60:
-                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場")
+                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場{_sl_tag}")
                         elif above_ma20 and above_ma60:
-                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱")
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱{_sl_tag}")
                         elif above_ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}")
                         else:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%{_sl_tag}")
 
                     else:
                         # 桶3 長線 / longterm：直接查基本面給結論
@@ -449,17 +501,17 @@ def format_message(results):
                             pass
 
                         if below_ma60 and _fund_score < 5 and pnl_pct < -20:
-                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — MA60 下 + 基本面轉弱（{_fund_score}分），考慮停損")
+                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — MA60 下 + 基本面轉弱（{_fund_score}分），考慮停損{_sl_tag}")
                         elif below_ma60 and _fund_score >= 5:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 下但基本面還行（{_fund_score}分），繼續觀察")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 下但基本面還行（{_fund_score}分），繼續觀察{_sl_tag}")
                         elif below_ma60:
-                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — MA60 下，基本面 {_fund_score} 分")
+                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — MA60 下，基本面 {_fund_score} 分{_sl_tag}")
                         elif above_ma20 and above_ma60:
-                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常")
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常{_sl_tag}")
                         elif above_ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}")
                         else:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%（MA60 資料不足，無法判斷趨勢）")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%（MA60 資料不足，無法判斷趨勢）{_sl_tag}")
                 except Exception:
                     lines.append(f"  — {sid}：無法取得資料")
             lines.append("")
