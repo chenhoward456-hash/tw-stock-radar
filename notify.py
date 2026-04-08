@@ -282,12 +282,13 @@ def format_message(results):
     except Exception:
         streaks = {}
 
-    # 桶2 候選 = RS 強 或 連續 3 天綠燈
+    # 桶2 候選 = RS 強 或 連續 3 天綠燈 或 強勢綠燈（≥8）
     b2_picks = sorted(
         [r for r in greens
          if r.get("rs_score", 0) >= 50
          or (streaks.get(r["stock_id"], {}).get("type") == "green"
-             and streaks.get(r["stock_id"], {}).get("streak", 0) >= 3)],
+             and streaks.get(r["stock_id"], {}).get("streak", 0) >= 3)
+         or r["avg"] >= 8.0],
         key=lambda x: x.get("rs_score", 0), reverse=True
     )
 

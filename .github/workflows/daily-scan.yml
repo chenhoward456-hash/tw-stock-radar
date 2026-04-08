@@ -5,6 +5,9 @@ on:
     - cron: '30 23 * * 0-4'  # UTC 23:30 = 台灣早上 07:30，週一到五
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   scan:
     runs-on: ubuntu-latest
