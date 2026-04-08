@@ -477,9 +477,14 @@ def format_message(results):
                         lines.append(f"  {sid} {name}：{pnl_pct:+.1f}% — 桶1 持續定額，不動")
 
                     elif strategy == "short":
-                        # 桶2 短線：嚴格 MA60 出場
+                        # 桶2 短線：止盈 + MA60 出場
+                        below_ma20 = ma20 and cp and cp < ma20
                         if below_ma60:
                             lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場{_sl_tag}")
+                        elif pnl_pct >= 20:
+                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利 ≥20%，考慮分批止盈{_sl_tag}")
+                        elif pnl_pct >= 10 and below_ma20:
+                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利回吐跌破 MA20，建議止盈{_sl_tag}")
                         elif above_ma20 and above_ma60:
                             lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱{_sl_tag}")
                         elif above_ma60:
