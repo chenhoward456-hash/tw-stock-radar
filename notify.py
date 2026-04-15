@@ -199,6 +199,10 @@ def run_scan():
             "avg": avg,
             "short_avg": short_avg,
             "overall": overall,
+            "current_price": tech.get("current_price", 0),
+            "atr": tech.get("atr", 0),
+            "ma20": tech.get("ma20", 0),
+            "ma60": tech.get("ma60", 0),
         }
 
     results = []
@@ -450,7 +454,17 @@ def format_message(results):
     if b2_picks:
         lines.append(f"🏆 桶2 精選（{len(b2_picks)} 檔）：")
         for r in b2_picks:
-            lines.append(f"  {r['stock_id']} {r['name']} 短{_b2_score(r)} RS{r.get('rs_score',0):.0f}")
+            cp = r.get("current_price", 0)
+            atr = r.get("atr", 0)
+            ma60 = r.get("ma60", 0)
+            # 停損：MA60 和 2×ATR 取較高的（短線用）
+            sl = max(ma60, cp - 2 * atr) if cp and atr else (ma60 if ma60 else 0)
+            tp_tag = ""
+            if sl and cp and sl < cp:
+                r_val = cp - sl
+                tp1 = cp + r_val
+                tp_tag = f" → 停損 {sl:.0f} / 止贏 {tp1:.0f}"
+            lines.append(f"  {r['stock_id']} {r['name']} 短{_b2_score(r)}{tp_tag}")
         lines.append("")
 
     # 連續天數（顯示用，含 min_streak=1 的所有綠燈）
@@ -477,7 +491,18 @@ def format_message(results):
     if b3_picks:
         lines.append(f"📉 桶3 佈局（{len(b3_picks)} 檔）：")
         for r in b3_picks[:5]:
-            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}/長{r.get('long_score',0)}")
+            cp = r.get("current_price", 0)
+            atr = r.get("atr", 0)
+            ma60 = r.get("ma60", 0)
+            # 長線停損：MA60 或 -8%，取較高的
+            sl = max(ma60, cp * 0.92) if cp else (ma60 if ma60 else 0)
+            tp_tag = ""
+            if sl and cp and sl < cp:
+                r_val = cp - sl
+                tp1 = cp + r_val
+                tp2 = cp + 2 * r_val
+                tp_tag = f" → 停損 {sl:.0f} / 止贏 {tp1:.0f}/{tp2:.0f}"
+            lines.append(f"  {r['stock_id']} {r['name']} 長{r.get('long_score',0)}{tp_tag}")
         if len(b3_picks) > 5:
             lines.append(f"  ...還有 {len(b3_picks) - 5} 檔")
         lines.append("")
