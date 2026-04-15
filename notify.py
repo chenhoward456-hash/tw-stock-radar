@@ -342,16 +342,20 @@ def format_message(results):
     except Exception:
         streaks = {}
 
-    # 桶2 候選：用短線分數篩選（重籌碼/動量），不是均衡分數
-    # 條件：短線分 ≥ 7 + (RS 強 或 連續綠燈 或 短線分 ≥ 8)
-    b2_pool = [r for r in results if r.get("short_avg", 0) >= 7]
+    # 桶2 候選：台股用短線分（重籌碼），美股用均衡分（沒法人資料，短線權重沒意義）
+    def _b2_score(r):
+        sid = r["stock_id"]
+        is_us = sid.replace("-", "").replace(".", "").isalpha()
+        return r["avg"] if is_us else r.get("short_avg", r["avg"])
+
+    b2_pool = [r for r in results if _b2_score(r) >= 7]
     b2_picks = sorted(
         [r for r in b2_pool
          if r.get("rs_score", 0) >= 50
          or (streaks.get(r["stock_id"], {}).get("type") == "green"
              and streaks.get(r["stock_id"], {}).get("streak", 0) >= 3)
-         or r.get("short_avg", 0) >= 8.0],
-        key=lambda x: x.get("short_avg", 0), reverse=True
+         or _b2_score(r) >= 8.0],
+        key=lambda x: _b2_score(x), reverse=True
     )
 
     # 持倉股票 ID（桶3 排除用）
@@ -446,7 +450,7 @@ def format_message(results):
     if b2_picks:
         lines.append(f"🏆 桶2 精選（{len(b2_picks)} 檔）：")
         for r in b2_picks:
-            lines.append(f"  {r['stock_id']} {r['name']} 短{r.get('short_avg', r['avg'])} RS{r.get('rs_score',0):.0f}")
+            lines.append(f"  {r['stock_id']} {r['name']} 短{_b2_score(r)} RS{r.get('rs_score',0):.0f}")
         lines.append("")
 
     # 連續天數（顯示用，含 min_streak=1 的所有綠燈）
