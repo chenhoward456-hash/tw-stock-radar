@@ -2,7 +2,7 @@ name: 每日臺股掃描
 
 on:
   schedule:
-    - cron: '30 23 * * 0-4'  # UTC 23:30 = 台灣早上 07:30，週一到五
+    - cron: '0 0 * * 1-5'  # UTC 00:00 = 台灣早上 08:00，週一到五
   workflow_dispatch:
 
 permissions:
@@ -11,26 +11,22 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: 安裝依賴
         run: pip install requests pandas numpy anthropic yfinance
-
-      - name: 執行掃描並推送 LINE
+      - name: 執行掃描並推送
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python notify.py
-
       - name: 把掃描結果 commit 回 repo
         run: |
           git config user.name "github-actions[bot]"
