@@ -18,14 +18,15 @@ jobs:
           python-version: '3.11'
       - name: 安裝依賴
         run: pip install requests pandas numpy anthropic yfinance
-      - name: 執行掃描並推送
+
+      - name: 執行掃描並推送通知
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python notify.py
       - name: 把掃描結果 commit 回 repo
         run: |

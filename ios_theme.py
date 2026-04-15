@@ -157,6 +157,40 @@ IOS_CSS = """
 
 
 /* ==========================================================
+   DARK MODE FIX — 強制白字，解決灰字看不清的問題
+   ========================================================== */
+@media (prefers-color-scheme: dark) {
+    .stApp, .stApp * {
+        color: #F5F5F7 !important;
+    }
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4 {
+        color: #FFFFFF !important;
+    }
+    .stApp p, .stApp span, .stApp label, .stApp div {
+        color: #F5F5F7 !important;
+    }
+    .stApp .stCaption, [data-testid="stCaptionContainer"] {
+        color: #AEAEB2 !important;
+    }
+    .stApp a {
+        color: #0A84FF !important;
+    }
+}
+[data-theme="dark"] .stApp,
+[data-theme="dark"] .stApp * {
+    color: #F5F5F7 !important;
+}
+[data-theme="dark"] .stApp h1,
+[data-theme="dark"] .stApp h2,
+[data-theme="dark"] .stApp h3 {
+    color: #FFFFFF !important;
+}
+[data-theme="dark"] .stCaption,
+[data-theme="dark"] [data-testid="stCaptionContainer"] {
+    color: #AEAEB2 !important;
+}
+
+/* ==========================================================
    GLOBAL — Background & Typography
    ========================================================== */
 .stApp,

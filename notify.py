@@ -28,6 +28,11 @@ except ImportError:
     TELEGRAM_BOT_TOKEN = ""
     TELEGRAM_CHAT_ID = ""
 
+try:
+    from config import DISCORD_WEBHOOK_URL
+except ImportError:
+    DISCORD_WEBHOOK_URL = ""
+
 from watchlist import WATCHLIST
 import market
 import technical
@@ -101,6 +106,27 @@ def send_telegram(message):
     except Exception as e:
         print(f"  ⚠ Telegram 發送失敗：{e}")
         return False
+
+
+def send_discord(message):
+    """透過 Discord Webhook 推送訊息（自動分段，Discord 上限 2000 字）"""
+    if not DISCORD_WEBHOOK_URL:
+        print("  ⚠ DISCORD_WEBHOOK_URL 未設定")
+        return False
+
+    parts = _split_message(message, limit=1900)
+    for part in parts:
+        try:
+            resp = requests.post(DISCORD_WEBHOOK_URL, json={
+                "content": part,
+            }, timeout=10)
+            if resp.status_code not in (200, 204):
+                print(f"  ⚠ Discord API 回傳 {resp.status_code}: {resp.text}")
+                return False
+        except Exception as e:
+            print(f"  ⚠ Discord 發送失敗：{e}")
+            return False
+    return True
 
 
 def run_scan():
@@ -592,20 +618,16 @@ def format_message(results):
 def main():
     has_line = bool(LINE_CHANNEL_ACCESS_TOKEN and LINE_USER_ID)
     has_telegram = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+    has_discord = bool(DISCORD_WEBHOOK_URL)
 
-    if not has_line and not has_telegram:
+    if not has_line and not has_telegram and not has_discord:
         print()
         print("⚠ 尚未設定通知管道！")
         print()
-        print("請到 config.py 設定至少一種：")
-        print()
-        print("方法一：LINE Bot（你已經有的話最快）")
-        print("  LINE_CHANNEL_ACCESS_TOKEN = '你的 Channel Access Token'")
-        print("  LINE_USER_ID = '你的 User ID'")
-        print()
-        print("方法二：Telegram Bot")
-        print("  TELEGRAM_BOT_TOKEN = '你的 Bot Token'")
-        print("  TELEGRAM_CHAT_ID = '你的 Chat ID'")
+        print("請到 config.py / 環境變數設定至少一種：")
+        print("  DISCORD_WEBHOOK_URL（推薦，免費無上限）")
+        print("  LINE_CHANNEL_ACCESS_TOKEN + LINE_USER_ID")
+        print("  TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID")
         print()
         sys.exit(1)
 
@@ -613,6 +635,8 @@ def main():
     print("=" * 50)
 
     channels = []
+    if has_discord:
+        channels.append("Discord")
     if has_line:
         channels.append("LINE")
     if has_telegram:
@@ -653,6 +677,13 @@ def main():
     message = format_message(results)
 
     print(f"\n📨 發送通知...\n")
+
+    if has_discord:
+        print("  Discord...", end="", flush=True)
+        if send_discord(message):
+            print(" ✅ 已發送")
+        else:
+            print(" ⚠ 失敗，請檢查 DISCORD_WEBHOOK_URL")
 
     if has_line:
         print("  LINE...", end="", flush=True)
