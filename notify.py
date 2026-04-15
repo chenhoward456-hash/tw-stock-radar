@@ -173,12 +173,20 @@ def run_scan():
             news_score = 5.0
 
         # 改用 weighted_score（跟主系統一致）
+        _is_us = market.is_us(stock_id)
         avg, _ = weighted_score(
             tech["score"], fund["score"], inst["score"], news_score,
-            strategy="balanced", is_us=market.is_us(stock_id),
+            strategy="balanced", is_us=_is_us,
             macro_multiplier=_macro_mult,
         )
         overall = "green" if avg >= 7 else ("yellow" if avg >= 4 else "red")
+
+        # 桶2 用：短線權重（重籌碼/動量）
+        short_avg, _ = weighted_score(
+            tech["score"], fund["score"], inst["score"], news_score,
+            strategy="short", is_us=_is_us,
+            macro_multiplier=_macro_mult,
+        )
 
         return {
             "stock_id": stock_id,
@@ -189,6 +197,7 @@ def run_scan():
             "inst": inst["score"],
             "news": news_score,
             "avg": avg,
+            "short_avg": short_avg,
             "overall": overall,
         }
 
@@ -333,14 +342,16 @@ def format_message(results):
     except Exception:
         streaks = {}
 
-    # 桶2 候選 = RS 強 或 連續 3 天綠燈 或 強勢綠燈（≥8）
+    # 桶2 候選：用短線分數篩選（重籌碼/動量），不是均衡分數
+    # 條件：短線分 ≥ 7 + (RS 強 或 連續綠燈 或 短線分 ≥ 8)
+    b2_pool = [r for r in results if r.get("short_avg", 0) >= 7]
     b2_picks = sorted(
-        [r for r in greens
+        [r for r in b2_pool
          if r.get("rs_score", 0) >= 50
          or (streaks.get(r["stock_id"], {}).get("type") == "green"
              and streaks.get(r["stock_id"], {}).get("streak", 0) >= 3)
-         or r["avg"] >= 8.0],
-        key=lambda x: x.get("rs_score", 0), reverse=True
+         or r.get("short_avg", 0) >= 8.0],
+        key=lambda x: x.get("short_avg", 0), reverse=True
     )
 
     # 持倉股票 ID（桶3 排除用）
@@ -435,7 +446,7 @@ def format_message(results):
     if b2_picks:
         lines.append(f"🏆 桶2 精選（{len(b2_picks)} 檔）：")
         for r in b2_picks:
-            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']} RS{r.get('rs_score',0):.0f}")
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r.get('short_avg', r['avg'])} RS{r.get('rs_score',0):.0f}")
         lines.append("")
 
     # 連續天數（顯示用，含 min_streak=1 的所有綠燈）
@@ -454,8 +465,8 @@ def format_message(results):
             lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}{tag}")
         lines.append("")
 
-    if not greens:
-        lines.append("💡 桶2 短線沒有候選（需綠燈+動量強），繼續存現金。")
+    if not b2_picks and not greens:
+        lines.append("💡 桶2 短線沒有候選（需短線綠燈+動量強），繼續存現金。")
         lines.append("")
 
     # 桶3 展開：長線佈局

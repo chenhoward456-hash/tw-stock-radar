@@ -166,7 +166,6 @@ WATCHLIST = {
         "SHOP",   # Shopify
         "ADBE",   # Adobe
         "UBER",   # Uber
-        "SQ",     # Block
         "COIN",   # Coinbase
     ],
     "美股/ETF": [

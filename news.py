@@ -137,13 +137,21 @@ def _keyword_score(articles, is_us=False):
     return score, pos, neg, ""
 
 
+_ai_disabled = False  # key 失敗後整個 session 不再重試
+
+
 def _ai_score(stock_id, stock_name, articles):
-    """用 Claude AI 分析新聞情緒"""
+    """用 Claude AI 分析新聞情緒（key 失敗後自動停用，不浪費時間）"""
+    global _ai_disabled
+    if _ai_disabled:
+        return None
+
     try:
         from anthropic import Anthropic
         from config import ANTHROPIC_API_KEY
 
         if not ANTHROPIC_API_KEY:
+            _ai_disabled = True
             return None
 
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -188,9 +196,14 @@ def _ai_score(stock_id, stock_name, articles):
         return score, summary
 
     except ImportError:
+        _ai_disabled = True
         return None
     except Exception as e:
         logger.warning(f"AI news scoring failed for {stock_id}: {e}")
+        # 401/403 = key 壞了，整個 session 不再嘗試
+        if "401" in str(e) or "authentication" in str(e).lower():
+            logger.warning("API key 無效，本次掃描停用 AI 新聞分析")
+            _ai_disabled = True
         return None
 
 
