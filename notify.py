@@ -36,29 +36,54 @@ import institutional
 import news as news_module
 from scoring import weighted_score, suggest_regime_strategy
 import streak
+import risk_management
 
 
 SIGNAL_TEXT = {"green": "[綠燈]", "yellow": "[黃燈]", "red": "[紅燈]"}
 
 
+def _split_message(text, limit=4900):
+    """將超長訊息切段，盡量在換行處切割"""
+    if len(text) <= limit:
+        return [text]
+    parts = []
+    while text:
+        if len(text) <= limit:
+            parts.append(text)
+            break
+        idx = text.rfind("\n", 0, limit)
+        if idx == -1:
+            idx = limit
+        parts.append(text[:idx])
+        text = text[idx:].lstrip("\n")
+    return parts
+
+
 def send_line(message):
-    """透過 LINE Messaging API 推送訊息"""
+    """透過 LINE Messaging API 推送訊息（自動分段）"""
     if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_ID:
+        print(f"  ⚠ LINE token 或 user ID 未設定")
         return False
 
     url = "https://api.line.me/v2/bot/message/push"
-    try:
-        resp = requests.post(url, headers={
-            "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-            "Content-Type": "application/json",
-        }, json={
-            "to": LINE_USER_ID,
-            "messages": [{"type": "text", "text": message}],
-        }, timeout=10)
-        return resp.status_code == 200
-    except Exception as e:
-        print(f"  ⚠ LINE 發送失敗：{e}")
-        return False
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    parts = _split_message(message)
+    for i, part in enumerate(parts):
+        try:
+            resp = requests.post(url, headers=headers, json={
+                "to": LINE_USER_ID,
+                "messages": [{"type": "text", "text": part}],
+            }, timeout=10)
+            if resp.status_code != 200:
+                print(f"  ⚠ LINE API 回傳 {resp.status_code}: {resp.text}")
+                return False
+        except Exception as e:
+            print(f"  ⚠ LINE 發送失敗：{e}")
+            return False
+    return True
 
 
 def send_telegram(message):
@@ -467,6 +492,25 @@ def format_message(results):
                         else:
                             _sl_tag = f"｜停損 {stop_loss}"
 
+                    # 止贏目標（R 倍數系統）— 賠錢時不顯示，專心看停損
+                    _tp_tag = ""
+                    if pnl_pct >= 0 and strategy != "hold":
+                        _tp = risk_management.calc_partial_tp(
+                            cp, buy_price, h.get("shares", 0),
+                            entry_stop=stop_loss if stop_loss else None,
+                        )
+                        if _tp and "error" not in _tp:
+                            tp1 = _tp["tp1_price"]
+                            tp2 = _tp["tp2_price"]
+                            if _tp["tp2_reached"]:
+                                _tp_tag = f"｜🎯 已過止贏2（{tp2:.0f}）"
+                            elif _tp["tp1_reached"]:
+                                _tp_tag = f"｜🎯 已過止贏1（{tp1:.0f}），下一個={tp2:.0f}"
+                            elif strategy == "short":
+                                _tp_tag = f"｜止贏 {tp1:.0f}"
+                            else:
+                                _tp_tag = f"｜止贏 {tp1:.0f}/{tp2:.0f}"
+
                     # 判斷動作（依策略不同給不同建議）
                     below_ma60 = ma60 and cp and cp < ma60
                     above_ma20 = ma20 and cp and cp > ma20
@@ -482,15 +526,15 @@ def format_message(results):
                         if below_ma60:
                             lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場{_sl_tag}")
                         elif pnl_pct >= 20:
-                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利 ≥20%，考慮分批止盈{_sl_tag}")
+                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利 ≥20%，考慮分批止盈{_sl_tag}{_tp_tag}")
                         elif pnl_pct >= 10 and below_ma20:
-                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利回吐跌破 MA20，建議止盈{_sl_tag}")
+                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利回吐跌破 MA20，建議止盈{_sl_tag}{_tp_tag}")
                         elif above_ma20 and above_ma60:
-                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱{_sl_tag}")
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱{_sl_tag}{_tp_tag}")
                         elif above_ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}{_tp_tag}")
                         else:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%{_sl_tag}")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%{_sl_tag}{_tp_tag}")
 
                     else:
                         # 桶3 長線 / longterm：直接查基本面給結論
@@ -509,15 +553,15 @@ def format_message(results):
                         if below_ma60 and _fund_score < 5 and pnl_pct < -20:
                             lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — MA60 下 + 基本面轉弱（{_fund_score}分），考慮停損{_sl_tag}")
                         elif below_ma60 and _fund_score >= 5:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 下但基本面還行（{_fund_score}分），繼續觀察{_sl_tag}")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 下但基本面還行（{_fund_score}分），繼續觀察{_sl_tag}{_tp_tag}")
                         elif below_ma60:
-                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — MA60 下，基本面 {_fund_score} 分{_sl_tag}")
+                            lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — MA60 下，基本面 {_fund_score} 分{_sl_tag}{_tp_tag}")
                         elif above_ma20 and above_ma60:
-                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常{_sl_tag}")
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常{_sl_tag}{_tp_tag}")
                         elif above_ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}{_tp_tag}")
                         else:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%（MA60 資料不足，無法判斷趨勢）{_sl_tag}")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%（MA60 資料不足，無法判斷趨勢）{_sl_tag}{_tp_tag}")
                 except Exception:
                     lines.append(f"  — {sid}：無法取得資料")
             lines.append("")
