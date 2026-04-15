@@ -22,7 +22,7 @@ import technical
 import fundamental
 import institutional
 from scoring import weighted_score
-from notify import send_line
+from notify import send_discord
 
 
 def _trailing_take_profit(current_price, buy_price, atr, peak_price=None):
@@ -298,11 +298,11 @@ def main():
     message = format_monitor_message(results)
     print(f"\n{message}")
 
-    # 有警告才推 LINE（不要每天都推正常的）
+    # 有警告才推 Discord（不要每天都推正常的）
     alerts = [r for r in results if r["warnings"]]
     if alerts:
-        print("\n🚨 有警告，推送 LINE...", end="", flush=True)
-        if send_line(message):
+        print("\n🚨 有警告，推送 Discord...", end="", flush=True)
+        if send_discord(message):
             print(" ✅ 已發送")
         else:
             print(" ⚠ 發送失敗")

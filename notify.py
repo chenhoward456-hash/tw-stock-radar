@@ -685,13 +685,6 @@ def main():
         else:
             print(" ⚠ 失敗，請檢查 DISCORD_WEBHOOK_URL")
 
-    if has_line:
-        print("  LINE...", end="", flush=True)
-        if send_line(message):
-            print(" ✅ 已發送")
-        else:
-            print(" ⚠ 失敗，請檢查 Token 和 User ID")
-
     if has_telegram:
         print("  Telegram...", end="", flush=True)
         if send_telegram(message):
