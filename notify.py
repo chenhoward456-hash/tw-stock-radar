@@ -165,7 +165,7 @@ def run_scan():
             fund = fundamental.analyze(per_df, rev_df, industry)
         inst = institutional.analyze(inst_df)
 
-        # 抓新聞（失敗給中性 5 分）
+        # 新聞：先用快速關鍵字，AI 分析留給候選股（省時間）
         try:
             news_result = news_module.analyze(stock_id, name)
             news_score = news_result["score"]
@@ -271,8 +271,25 @@ def check_0050_regime():
         return "neutral", ""
 
 
+def _load_yesterday_results():
+    """載入昨天的掃描結果，用來比對變化"""
+    try:
+        import tracker
+        dates = tracker.list_records()
+        if len(dates) < 2:
+            return {}
+        # 倒數第二個是昨天（最新的是今天剛存的）
+        yesterday = dates[-2] if len(dates) >= 2 else dates[-1]
+        data = tracker.load_record(yesterday)
+        if data and "results" in data:
+            return {r["stock_id"]: r for r in data["results"]}
+    except Exception:
+        pass
+    return {}
+
+
 def format_message(results):
-    """格式化通知訊息（R6 統一版：三桶建議 = 下面清單，同一套邏輯）"""
+    """格式化通知訊息（R7：精簡摘要 + 變化偵測 + 桶2 空倉提醒）"""
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -381,14 +398,97 @@ def format_message(results):
         key=lambda x: x.get("long_score", 0), reverse=True
     )
 
+    # ===== Step 2.5: 變化偵測（跟昨天比）=====
+    yesterday = _load_yesterday_results()
+    new_greens = []  # 今天新變綠燈
+    lost_greens = []  # 昨天綠燈今天掉了
+    if yesterday:
+        today_ids = {r["stock_id"]: r for r in results}
+        for r in results:
+            sid = r["stock_id"]
+            y = yesterday.get(sid)
+            if r["avg"] >= 7 and (not y or y.get("avg", 0) < 7):
+                new_greens.append(r)
+            elif r["avg"] < 7 and y and y.get("avg", 0) >= 7:
+                lost_greens.append({"stock_id": sid, "name": r["name"],
+                                    "old": y.get("avg", 0), "new": r["avg"]})
+
+    # ===== Step 2.6: 桶2 空倉偵測 =====
+    _has_short_holding = any(
+        h.get("strategy") == "short"
+        for h in _vars.get("HOLDINGS", [])
+    ) if '_vars' in dir() else False
+    # 重新讀一次確保有值
+    try:
+        _vars2 = {}
+        _hp2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings.py")
+        with open(_hp2, "r", encoding="utf-8") as _f2:
+            exec(_f2.read(), _vars2)
+        _has_short_holding = any(
+            h.get("strategy") == "short" for h in _vars2.get("HOLDINGS", [])
+        )
+    except Exception:
+        _has_short_holding = False
+
     # ===== Step 3: 組裝訊息 =====
+
+    # ━━━ 30 秒摘要（最重要的放最前面）━━━
+    lines.append("━━━ 今日重點 ━━━")
+
+    # 持倉需要動嗎
+    _holding_alerts = []
+    try:
+        for h in _vars2.get("HOLDINGS", []):
+            sid = h["stock_id"]
+            strategy = h.get("strategy", "longterm")
+            if strategy == "hold":
+                continue
+            stop_loss = h.get("stop_loss", 0)
+            buy_price = h.get("buy_price", 0)
+            _hr = next((r for r in results if r["stock_id"] == sid), None)
+            if _hr:
+                cp = _hr.get("current_price", 0)
+                if stop_loss and cp and cp <= stop_loss:
+                    _holding_alerts.append(f"🚨 {sid}：已破停損！")
+                elif stop_loss and cp and cp <= stop_loss * 1.03:
+                    _holding_alerts.append(f"⚠ {sid}：接近停損")
+                elif buy_price and cp:
+                    pnl = (cp / buy_price - 1) * 100
+                    if pnl >= 20:
+                        _holding_alerts.append(f"💰 {sid}：+{pnl:.0f}% 考慮止贏")
+    except Exception:
+        pass
+
+    if _holding_alerts:
+        for a in _holding_alerts:
+            lines.append(a)
+    else:
+        lines.append("持倉：不用動")
+
+    # 桶2 空倉提醒
+    if not _has_short_holding and b2_picks:
+        top = b2_picks[0]
+        lines.append(f"桶2 空倉！候選：{top['stock_id']} {top['name']}")
+    elif not _has_short_holding:
+        lines.append("桶2 空倉，目前無候選")
+
+    # 今日變化
+    if new_greens:
+        names_str = " ".join(f"{r['stock_id']}" for r in new_greens[:3])
+        lines.append(f"🆕 新綠燈：{names_str}")
+    if lost_greens:
+        names_str = " ".join(f"{r['stock_id']}" for r in lost_greens[:3])
+        lines.append(f"📉 掉出綠燈：{names_str}")
+    if not new_greens and not lost_greens and yesterday:
+        lines.append("訊號無變化")
+
+    lines.append("")
 
     # 環境警報
     if _macro_score <= 3:
         lines.append(f"🚨 環境分 {_macro_score}/10 — 防禦模式")
     elif _macro_mult < 0.95:
         lines.append(f"⚠ 環境偏弱（{_macro_score}/10）")
-    lines.append("")
 
     # 0050 狀態
     regime, regime_msg = check_0050_regime()
@@ -396,13 +496,9 @@ def format_message(results):
         lines.append("🚨 0050 空頭 — 桶1 縮減")
     elif regime == "warning":
         lines.append("⚠ 0050 轉弱中")
-    elif regime == "bull":
-        lines.append("✅ 0050 多頭")
-    if regime_msg:
-        lines.append(regime_msg)
     lines.append("")
 
-    # ━━━ 三桶操作建議（核心，往下的清單就是這裡的展開）━━━
+    # ━━━ 三桶操作建議 ━━━
     lines.append("━━━ 三桶操作建議 ━━━")
     lines.append("")
 

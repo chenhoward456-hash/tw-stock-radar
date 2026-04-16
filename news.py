@@ -278,11 +278,13 @@ def analyze(stock_id, stock_name):
         details.append("— 分析方式：關鍵字比對")
         details.append(f"— 正面關鍵字 {pos} 次 / 負面關鍵字 {neg} 次")
 
-    # 新聞量異常偵測
-    vol_adj, vol_detail = _news_volume_signal(stock_id, stock_name, is_us)
-    if vol_detail:
-        details.append(vol_detail)
-        score += vol_adj
+    # 新聞量異常偵測（直接用已抓的 articles，不重抓）
+    _vol_count = len(articles)
+    if _vol_count >= 18:
+        details.append(f"⚠ 新聞量偏多（{_vol_count} 則），留意重大事件")
+        score -= 0.5
+    elif _vol_count <= 3:
+        details.append(f"— 新聞量很少（{_vol_count} 則），市場關注度低")
 
     score = max(1.0, min(10.0, score))
 
