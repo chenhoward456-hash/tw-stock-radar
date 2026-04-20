@@ -283,6 +283,81 @@ def calc_smart_exit(current_price, buy_price, shares, current_score,
     }
 
 
+# ─── Phase 1-B2: Chandelier Exit（趨勢股移動停利）─────────────────────────
+
+def calc_chandelier_exit(highest_high, atr, multiplier=3.0):
+    """
+    Chandelier Exit — 以「進場後最高點 − k×ATR」作為移動停利線。
+
+    用途：到 2R 以上後，剩餘部位交給 Chandelier 追蹤，讓大贏家跑完趨勢。
+    不切天花板，波動股也能自動給足空間。
+
+    參數：
+      highest_high  進場後的最高收盤價
+      atr           當前 ATR（14）
+      multiplier    ATR 倍數（預設 3.0，較 2×ATR 寬鬆，避免被洗下車）
+
+    回傳 dict：
+      chandelier_stop  當前追蹤停利價
+      atr_distance     k×ATR 距離
+    """
+    if highest_high <= 0 or atr <= 0:
+        return {"chandelier_stop": 0, "atr_distance": 0}
+
+    dist = multiplier * atr
+    stop = highest_high - dist
+    return {
+        "chandelier_stop": round(stop, 2),
+        "atr_distance": round(dist, 2),
+    }
+
+
+# ─── Phase 1-B3: Time Stop（時間停損）──────────────────────────────────────
+
+def check_time_stop(buy_date_str, current_r, days_limit=10, min_r=1.0, today=None):
+    """
+    時間停損：動量股進場 N 天若還沒達 +min_r，代表訊號失效，警告出場。
+
+    邏輯依據：動量策略是「該動就動」；不動 = 訊號失效 = 機會成本正在累積。
+
+    參數：
+      buy_date_str  買入日期 'YYYY-MM-DD'
+      current_r     當前 R 倍數
+      days_limit    多少個日曆日後觸發（預設 10）
+      min_r         門檻 R（預設 1.0）
+      today         測試注入用；預設 None = 現在
+
+    回傳 dict：
+      days_held     已持有天數
+      triggered     是否觸發警告
+      message       建議行動
+    """
+    from datetime import datetime, date
+
+    if not buy_date_str:
+        return {"days_held": 0, "triggered": False, "message": ""}
+
+    try:
+        bd = datetime.strptime(buy_date_str, "%Y-%m-%d").date()
+    except Exception:
+        return {"days_held": 0, "triggered": False, "message": ""}
+
+    td = today if today else date.today()
+    days_held = (td - bd).days
+
+    if days_held < days_limit:
+        return {"days_held": days_held, "triggered": False, "message": ""}
+
+    triggered = current_r < min_r
+    if triggered:
+        msg = (f"⏰ 持有 {days_held} 天未達 +{min_r}R（當前 {current_r:+.1f}R），"
+               f"動量訊號失效，考慮出場釋放資金")
+    else:
+        msg = f"持有 {days_held} 天，+{current_r:.1f}R 進度正常"
+
+    return {"days_held": days_held, "triggered": triggered, "message": msg}
+
+
 # ─── Phase 1-C: 整體資金回撤限制 ────────────────────────────────────────────
 
 def check_portfolio_drawdown(holdings_list, total_budget, drawdown_threshold=0.15):

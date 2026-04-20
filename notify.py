@@ -174,17 +174,21 @@ def run_scan():
 
         # 改用 weighted_score（跟主系統一致）
         _is_us = market.is_us(stock_id)
+        # 美股用專屬動量策略（scoring.py R7 新增）
+        main_strategy = "us_momentum" if _is_us else "balanced"
+        short_strategy = "us_momentum" if _is_us else "short"
+
         avg, _ = weighted_score(
             tech["score"], fund["score"], inst["score"], news_score,
-            strategy="balanced", is_us=_is_us,
+            strategy=main_strategy, is_us=_is_us,
             macro_multiplier=_macro_mult,
         )
         overall = "green" if avg >= 7 else ("yellow" if avg >= 4 else "red")
 
-        # 桶2 用：短線權重（重籌碼/動量）
+        # 桶2 用：短線權重（重籌碼/動量）；美股走 us_momentum
         short_avg, _ = weighted_score(
             tech["score"], fund["score"], inst["score"], news_score,
-            strategy="short", is_us=_is_us,
+            strategy=short_strategy, is_us=_is_us,
             macro_multiplier=_macro_mult,
         )
 
@@ -201,8 +205,13 @@ def run_scan():
             "overall": overall,
             "current_price": tech.get("current_price", 0),
             "atr": tech.get("atr", 0),
+            "ma5": tech.get("ma5"),
             "ma20": tech.get("ma20", 0),
             "ma60": tech.get("ma60", 0),
+            "rsi": tech.get("rsi"),
+            "adx": tech.get("adx"),
+            "weekly_trend": tech.get("weekly_trend", "neutral"),
+            "is_us": _is_us,
         }
 
     results = []
@@ -288,8 +297,109 @@ def _load_yesterday_results():
     return {}
 
 
+def _build_tag(r, streak_info=None):
+    """
+    為單一候選股產生 1 行辨識 tag（R8）
+    規則（優先序）：
+      1. 首日由黃轉綠 + 量爆 → 「突破首日」
+      2. 52週新高附近 → 「接近52週高」
+      3. 週線+日線雙多 + RS≥80 → 「RS頂尖+雙時框」
+      4. 連續 N 天綠燈 → 「連N天綠」
+      5. fund ≥ 8 + 估值便宜 → 「基本面旗艦」
+      6. inst ≥ 8 → 「法人大買」
+    """
+    tags = []
+    tech = r.get("tech", 0)
+    fund = r.get("fund", 0)
+    inst = r.get("inst", 0)
+    rs = r.get("rs_score", 0)
+    weekly = r.get("weekly_trend", "neutral")
+
+    # 連續天數
+    if streak_info:
+        sk = streak_info.get(r["stock_id"], {})
+        days = sk.get("streak", 0) if sk.get("type") == "green" else 0
+        if days == 1:
+            tags.append("首日綠")
+        elif days >= 5:
+            tags.append(f"連{days}天綠")
+        elif days >= 2:
+            tags.append(f"連{days}天")
+
+    # 雙時框共振
+    if weekly == "bullish" and tech >= 7:
+        if rs >= 80:
+            tags.append("RS頂尖+雙時框")
+        else:
+            tags.append("週線+日線雙多")
+
+    # 基本面/籌碼
+    if fund >= 8:
+        tags.append("基本面強")
+    if inst >= 8:
+        tags.append("法人大買")
+
+    return "｜".join(tags[:3]) if tags else ""
+
+
+def _entry_timing(r):
+    """
+    呼叫 scoring.assess_entry_timing 判斷進場時機
+    回傳 (icon, 建議進場價 or None, 簡短說明)
+    """
+    from scoring import assess_entry_timing
+    try:
+        res = assess_entry_timing(
+            score=r.get("avg", 5),
+            rsi=r.get("rsi"),
+            price=r.get("current_price", 0),
+            ma20=r.get("ma20", 0),
+            ma5=r.get("ma5"),
+        )
+        timing = res.get("timing", "not_recommended")
+        ideal = res.get("ideal_entry")
+        if timing == "now":
+            return "🟢立即", None, "未過熱"
+        elif timing == "wait_pullback":
+            return "🟡等拉回", ideal, res.get("reason", "")
+        elif timing == "watch":
+            return "👀觀察", ideal, res.get("reason", "")
+        else:
+            return "🔴暫不", None, res.get("reason", "")
+    except Exception:
+        return "", None, ""
+
+
+def _short_stop(cp, atr, ma20, ma60):
+    """
+    桶2 短線停損：min(MA20, cp − 2×ATR)
+    R8：修正原本 max(ma60, ...) 的邏輯，改用較近的停損讓短線做短。
+    MA20 距離太近（<3%）時退用 2×ATR 作為底線；MA60 僅作為絕對底線避免過緊。
+    """
+    if cp <= 0:
+        return 0
+    atr_stop = cp - 2 * atr if atr > 0 else cp * 0.95
+    if ma20 and ma20 > 0:
+        # 取 MA20 與 2×ATR 較靠近的那個（較高價），但距離不能 <3%
+        tight = max(ma20, atr_stop)
+        if cp > 0 and (cp - tight) / cp < 0.03:
+            tight = min(ma20, atr_stop)  # 太緊 → 退到較遠者
+        return tight
+    return atr_stop
+
+
+def _long_stop(cp, atr, ma60):
+    """
+    桶3 長線停損：max(MA60, cp × 0.92)，給足長線空間。
+    """
+    if cp <= 0:
+        return 0
+    pct_stop = cp * 0.92
+    return max(ma60, pct_stop) if ma60 else pct_stop
+
+
 def format_message(results):
-    """格式化通知訊息（R7：精簡摘要 + 變化偵測 + 桶2 空倉提醒）"""
+    """格式化通知訊息（R8：進場時機+三欄+tag+時間停損+空頭強制空倉）"""
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -357,9 +467,9 @@ def format_message(results):
     watchlist = [r for r in results if 6 <= r["avg"] < 7]
     reds = [r for r in results if r["avg"] < 4]
 
-    # 連續訊號（桶2 用）
+    # 連續訊號（桶2 用；R8 改抓 min_streak=1 做優先級判斷）
     try:
-        streaks = streak.detect_streaks(min_streak=3)
+        streaks = streak.detect_streaks(min_streak=1)
     except Exception:
         streaks = {}
 
@@ -369,14 +479,34 @@ def format_message(results):
         is_us = sid.replace("-", "").replace(".", "").isalpha()
         return r["avg"] if is_us else r.get("short_avg", r["avg"])
 
+    def _priority(r):
+        """
+        R8：桶2 優先級（越高越先推）
+          P3 首日綠燈 + 量/突破  → 抓最早訊號
+          P2 連 2 天綠           → 次優
+          P1 RS ≥ 80             → 強勢
+          P0 其他（連 3+ 天綠降級到這裡）
+        """
+        sid = r["stock_id"]
+        sk = streaks.get(sid, {})
+        days = sk.get("streak", 0) if sk.get("type") == "green" else 0
+        rs = r.get("rs_score", 0)
+
+        if days == 1 and r.get("tech", 0) >= 7:
+            return 3
+        if days == 2:
+            return 2
+        if rs >= 80:
+            return 1
+        return 0
+
     b2_pool = [r for r in results if _b2_score(r) >= 7]
     b2_picks = sorted(
         [r for r in b2_pool
          if r.get("rs_score", 0) >= 50
-         or (streaks.get(r["stock_id"], {}).get("type") == "green"
-             and streaks.get(r["stock_id"], {}).get("streak", 0) >= 3)
+         or _priority(r) >= 2
          or _b2_score(r) >= 8.0],
-        key=lambda x: _b2_score(x), reverse=True
+        key=lambda x: (_priority(x), _b2_score(x)), reverse=True
     )
 
     # 持倉股票 ID（桶3 排除用）
@@ -391,10 +521,22 @@ def format_message(results):
         pass
 
     # 桶3 候選 = 長線分高 + 短線低（排除已持倉）
+    # R8：加價值陷阱過濾 — 必須 RS >= 30 + MA60 斜率 >= 0（不在自由落體中）
+    def _ma60_slope_ok(r):
+        """長線要在底部橫盤或翻揚，不是自由落體中"""
+        cp = r.get("current_price", 0)
+        ma60 = r.get("ma60", 0)
+        if not ma60 or ma60 <= 0 or cp <= 0:
+            return True  # 資料不足時不擋
+        # 簡化：現價距 MA60 偏離 <20% 即視為未崩盤；真正斜率在 technical 層算
+        return (cp / ma60) >= 0.80
+
     b3_picks = sorted(
         [r for r in results
          if r.get("long_score", 0) >= 7 and r["avg"] < 7
-         and r["stock_id"] not in _holding_ids],
+         and r["stock_id"] not in _holding_ids
+         and r.get("rs_score", 0) >= 30
+         and _ma60_slope_ok(r)],
         key=lambda x: x.get("long_score", 0), reverse=True
     )
 
@@ -518,9 +660,9 @@ def format_message(results):
     else:
         lines.append("桶1 0050：照買 7,000")
 
-    # 桶2（= 精選清單，環境差時暫停）
+    # 桶2（= 精選清單，環境差時強制空倉；R8 改：macro≤3 完全不推候選）
     if _defensive:
-        lines.append("桶2 短線：⚠ 環境差，4,000 繼續存，不進場")
+        lines.append("桶2 短線：🚨 環境分≤3 強制空倉，4,000 繼續存，不進場")
     elif b2_picks:
         top = b2_picks[:3]
         names = " / ".join(f"{r['stock_id']} {r['name']}" for r in top)
@@ -546,59 +688,87 @@ def format_message(results):
 
     # ━━━ 展開清單（跟上面三桶是同一批資料）━━━
 
-    # 桶2 展開：精選 + 其他綠燈
-    if b2_picks:
+    # 桶2 展開：精選 + 其他綠燈（R8 新格式：進場時機 + 三欄價位 + tag）
+    # streaks 用於 tag；前面已算好 streaks（min_streak=1）
+    streaks_all = streaks
+
+    if b2_picks and not _defensive:
         lines.append(f"🏆 桶2 精選（{len(b2_picks)} 檔）：")
         for r in b2_picks:
             cp = r.get("current_price", 0)
             atr = r.get("atr", 0)
+            ma20 = r.get("ma20", 0)
             ma60 = r.get("ma60", 0)
-            # 停損：MA60 和 2×ATR 取較高的（短線用）
-            sl = max(ma60, cp - 2 * atr) if cp and atr else (ma60 if ma60 else 0)
-            tp_tag = ""
+            # R8：短線用 min(MA20, 2×ATR)，不再被 MA60 拉遠
+            sl = _short_stop(cp, atr, ma20, ma60)
+            icon, ideal_entry, _ = _entry_timing(r)
+            tag = _build_tag(r, streaks_all)
+            sc = _b2_score(r)
+
+            # 三欄主行：代號 名稱 短分 時機
+            line1 = f"  {r['stock_id']} {r['name']} 短{sc} {icon}"
+            if tag:
+                line1 += f" [{tag}]"
+            lines.append(line1)
+
+            # 子行：進場 / 停損 / 分批止贏
             if sl and cp and sl < cp:
                 r_val = cp - sl
                 tp1 = cp + r_val
-                tp_tag = f" → 停損 {sl:.0f} / 止贏 {tp1:.0f}"
-            lines.append(f"  {r['stock_id']} {r['name']} 短{_b2_score(r)}{tp_tag}")
+                tp2 = cp + 2 * r_val
+                entry_desc = f"進 {cp:.0f}" if icon != "🟡等拉回" else \
+                    (f"等拉回 {ideal_entry:.0f}" if ideal_entry else "等拉回")
+                sl_pct = (cp - sl) / cp * 100
+                lines.append(
+                    f"     {entry_desc} / 停損 {sl:.0f} (-{sl_pct:.1f}%) / 止贏 {tp1:.0f}→{tp2:.0f}→追蹤"
+                )
+        lines.append("")
+    elif b2_picks and _defensive:
+        # 空頭環境不展開名單，只給提醒
+        lines.append(f"🏆 桶2 候選 {len(b2_picks)} 檔（環境空頭強制暫停，待轉正再動）")
         lines.append("")
 
-    # 連續天數（顯示用，含 min_streak=1 的所有綠燈）
-    try:
-        streaks_all = streak.detect_streaks(min_streak=1)
-    except Exception:
-        streaks_all = {}
-
     other_greens = [r for r in greens if r not in b2_picks]
-    if other_greens:
+    if other_greens and not _defensive:
         lines.append(f"🟢 其他綠燈（{len(other_greens)} 檔，動量偏弱等拉回）：")
         for r in other_greens[:5]:
             sk = streaks_all.get(r["stock_id"], {})
             days = sk.get("streak", 0) if sk.get("type") == "green" else 0
-            tag = f" 連{days}/3天" if days > 0 else ""
-            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}{tag}")
+            streak_tag = f" 連{days}天" if days > 0 else ""
+            icon, _, _ = _entry_timing(r)
+            lines.append(f"  {r['stock_id']} {r['name']} 短{r['avg']}{streak_tag} {icon}")
         lines.append("")
 
     if not b2_picks and not greens:
         lines.append("💡 桶2 短線沒有候選（需短線綠燈+動量強），繼續存現金。")
         lines.append("")
 
-    # 桶3 展開：長線佈局
+    # 桶3 展開：長線佈局（R8：進場時機 + tag + 分批止贏文案）
     if b3_picks:
         lines.append(f"📉 桶3 佈局（{len(b3_picks)} 檔）：")
         for r in b3_picks[:5]:
             cp = r.get("current_price", 0)
             atr = r.get("atr", 0)
             ma60 = r.get("ma60", 0)
-            # 長線停損：MA60 或 -8%，取較高的
-            sl = max(ma60, cp * 0.92) if cp else (ma60 if ma60 else 0)
-            tp_tag = ""
+            sl = _long_stop(cp, atr, ma60)
+            icon, ideal_entry, _ = _entry_timing(r)
+            tag = _build_tag(r, streaks_all)
+
+            line1 = f"  {r['stock_id']} {r['name']} 長{r.get('long_score',0)} {icon}"
+            if tag:
+                line1 += f" [{tag}]"
+            lines.append(line1)
+
             if sl and cp and sl < cp:
                 r_val = cp - sl
                 tp1 = cp + r_val
                 tp2 = cp + 2 * r_val
-                tp_tag = f" → 停損 {sl:.0f} / 止贏 {tp1:.0f}/{tp2:.0f}"
-            lines.append(f"  {r['stock_id']} {r['name']} 長{r.get('long_score',0)}{tp_tag}")
+                entry_desc = f"進 {cp:.0f}" if icon != "🟡等拉回" else \
+                    (f"等拉回 {ideal_entry:.0f}" if ideal_entry else "等拉回")
+                sl_pct = (cp - sl) / cp * 100
+                lines.append(
+                    f"     {entry_desc} / 停損 {sl:.0f} (-{sl_pct:.1f}%) / 止贏 {tp1:.0f}→{tp2:.0f}→追蹤"
+                )
         if len(b3_picks) > 5:
             lines.append(f"  ...還有 {len(b3_picks) - 5} 檔")
         lines.append("")
@@ -683,14 +853,32 @@ def format_message(results):
                         lines.append(f"  {sid} {name}：{pnl_pct:+.1f}% — 桶1 持續定額，不動")
 
                     elif strategy == "short":
-                        # 桶2 短線：止盈 + MA60 出場
+                        # 桶2 短線：止盈 + MA60 出場 + R8 時間停損
                         below_ma20 = ma20 and cp and cp < ma20
+
+                        # R8：時間停損檢查（短線 10 天未達 +1R → 警告）
+                        _time_tag = ""
+                        try:
+                            _buy_date = h.get("buy_date", "")
+                            _eff_stop = stop_loss if stop_loss else cp * 0.92
+                            _r_val = buy_price - _eff_stop
+                            _cur_r = (cp - buy_price) / _r_val if _r_val > 0 else 0
+                            _ts = risk_management.check_time_stop(
+                                _buy_date, _cur_r, days_limit=10, min_r=1.0
+                            )
+                            if _ts["triggered"]:
+                                _time_tag = f"｜⏰ {_ts['message']}"
+                        except Exception:
+                            pass
+
                         if below_ma60:
-                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場{_sl_tag}")
+                            lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — 跌破 MA60，短線出場{_sl_tag}{_time_tag}")
                         elif pnl_pct >= 20:
-                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利 ≥20%，考慮分批止盈{_sl_tag}{_tp_tag}")
+                            lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利 ≥20%，分批止盈：1/3 出、1/3 等 2R、1/3 追蹤停利{_sl_tag}{_tp_tag}")
                         elif pnl_pct >= 10 and below_ma20:
                             lines.append(f"  💰 {sid} {name}：{pnl_pct:+.1f}% — 獲利回吐跌破 MA20，建議止盈{_sl_tag}{_tp_tag}")
+                        elif _time_tag:
+                            lines.append(f"  ⏰ {sid} {name}：{pnl_pct:+.1f}%{_sl_tag}{_tp_tag}{_time_tag}")
                         elif above_ma20 and above_ma60:
                             lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常，繼續抱{_sl_tag}{_tp_tag}")
                         elif above_ma60:
@@ -712,6 +900,21 @@ def format_message(results):
                         except Exception:
                             pass
 
+                        # R8：長線獲利 ≥2R 時改用 Chandelier Exit 追蹤
+                        _chand_tag = ""
+                        try:
+                            _atr = tech_r.get("atr", 0)
+                            _eff_stop = stop_loss if stop_loss else buy_price * 0.92
+                            _r_val = buy_price - _eff_stop
+                            _cur_r = (cp - buy_price) / _r_val if _r_val > 0 else 0
+                            if _cur_r >= 2.0 and _atr > 0:
+                                # 用現價當 peak 的近似（真實 peak 要另存）
+                                _ch = risk_management.calc_chandelier_exit(cp, _atr, multiplier=3.0)
+                                if _ch["chandelier_stop"] > 0:
+                                    _chand_tag = f"｜🎯 追蹤停利 {_ch['chandelier_stop']:.0f}（Chandelier 3×ATR）"
+                        except Exception:
+                            pass
+
                         if below_ma60 and _fund_score < 5 and pnl_pct < -20:
                             lines.append(f"  🚨 {sid} {name}：{pnl_pct:+.1f}% — MA60 下 + 基本面轉弱（{_fund_score}分），考慮停損{_sl_tag}")
                         elif below_ma60 and _fund_score >= 5:
@@ -719,9 +922,9 @@ def format_message(results):
                         elif below_ma60:
                             lines.append(f"  ⚠ {sid} {name}：{pnl_pct:+.1f}% — MA60 下，基本面 {_fund_score} 分{_sl_tag}{_tp_tag}")
                         elif above_ma20 and above_ma60:
-                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常{_sl_tag}{_tp_tag}")
+                            lines.append(f"  ✅ {sid} {name}：{pnl_pct:+.1f}% — 趨勢正常{_sl_tag}{_tp_tag}{_chand_tag}")
                         elif above_ma60:
-                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}{_tp_tag}")
+                            lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}% — MA60 之上，持有{_sl_tag}{_tp_tag}{_chand_tag}")
                         else:
                             lines.append(f"  — {sid} {name}：{pnl_pct:+.1f}%（MA60 資料不足，無法判斷趨勢）{_sl_tag}{_tp_tag}")
                 except Exception:

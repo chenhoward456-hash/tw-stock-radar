@@ -17,22 +17,22 @@
 """
 import numpy as np
 
-# 策略權重設定（R6 調整：降低 news 噪音權重，強化 fund/inst 預測力）
+# 策略權重設定（R7：降低 news 噪音、強化 inst/fund 預測力；新增美股動量專用策略）
 STRATEGIES = {
     "balanced": {
         "label": "均衡",
-        "description": "基本面＋法人為主，消息面降權（R6 優化）",
-        "weights": {"tech": 0.10, "fund": 0.40, "inst": 0.30, "news": 0.20},
+        "description": "基本面+法人為主，消息面再降權",
+        "weights": {"tech": 0.10, "fund": 0.40, "inst": 0.35, "news": 0.15},
     },
     "short": {
         "label": "短線波段",
-        "description": "重籌碼，消息面輔助，技術面做風控",
-        "weights": {"tech": 0.15, "fund": 0.10, "inst": 0.45, "news": 0.30},
+        "description": "重籌碼，消息面降權避免雜訊",
+        "weights": {"tech": 0.15, "fund": 0.15, "inst": 0.50, "news": 0.20},
     },
     "long": {
         "label": "中長線持有",
         "description": "重基本面，法人追蹤，消息面降權",
-        "weights": {"tech": 0.05, "fund": 0.45, "inst": 0.25, "news": 0.25},
+        "weights": {"tech": 0.05, "fund": 0.45, "inst": 0.30, "news": 0.20},
     },
     "dividend": {
         "label": "存股領息",
@@ -44,6 +44,11 @@ STRATEGIES = {
         "description": "不看短期漲跌，只看營收成長和估值便宜度",
         "weights": {"tech": 0.0, "fund": 0.60, "inst": 0.15, "news": 0.25},
         "use_valuation": True,
+    },
+    "us_momentum": {
+        "label": "美股動量",
+        "description": "美股專用：技術/趨勢主導，消息面降權（news 噪音大）",
+        "weights": {"tech": 0.40, "fund": 0.30, "inst": 0.0, "news": 0.30},
     },
 }
 
