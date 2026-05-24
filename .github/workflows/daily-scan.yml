@@ -1,15 +1,16 @@
-name: 每日臺股掃描
+name: 每日 0050 推播
+
+# 策略改為純 0050 DCA — 不再掃個股，只推 0050 收盤分析到 Discord
+# 原本 notify.py 多股掃描已停用（檔案保留供手動執行）
 
 on:
   schedule:
-    - cron: '0 0 * * 1-5'  # UTC 00:00 = 台灣早上 08:00，週一到五
+    # 台灣時間 15:30 收盤後（UTC 07:30），週一到五
+    - cron: '30 7 * * 1-5'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  scan:
+  push_0050:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,21 +18,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: 安裝依賴
-        run: pip install requests pandas numpy anthropic yfinance
+        run: pip install requests pandas numpy yfinance
 
-      - name: 執行掃描並推送通知
+      - name: 推播 0050 盤後分析
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
-        run: python notify.py
-      - name: 把掃描結果 commit 回 repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/signals/*.json || true
-          git diff --staged --quiet || git commit -m "自動掃描結果 $(date +%Y-%m-%d)"
-          git push || true
+        run: python notify_0050.py
