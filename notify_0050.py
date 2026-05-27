@@ -69,18 +69,48 @@ def fetch_yfinance():
     ]
 
 
-def get_price_data():
-    """抓近 2 年 0050 資料，FinMind 優先，失敗用 yfinance"""
+def fetch_yfinance_intraday():
+    """盤中即時價：用 yfinance 1m bar 抓最新報價"""
+    import yfinance as yf
+    t = yf.Ticker("0050.TW")
+    intraday = t.history(period="1d", interval="1m")
+    if intraday.empty:
+        return None
+    return float(intraday["Close"].iloc[-1])
+
+
+def get_price_data(intraday=False):
+    """抓近 2 年 0050 資料，FinMind 優先，失敗用 yfinance
+    intraday=True 時，把最後一筆替換成 yfinance 即時價"""
     today = datetime.now().strftime("%Y-%m-%d")
     start = (datetime.now().replace(year=datetime.now().year - 2)).strftime("%Y-%m-%d")
+    data = None
+    src = None
     try:
         data = fetch_finmind(start, today)
         if data and len(data) > 200:
-            return data, "FinMind"
+            src = "FinMind"
     except Exception as e:
         print(f"FinMind 失敗：{e}")
-    print("改用 yfinance...")
-    return fetch_yfinance(), "yfinance"
+    if not data or len(data) < 200:
+        print("改用 yfinance...")
+        data = fetch_yfinance()
+        src = "yfinance"
+
+    if intraday:
+        try:
+            now = fetch_yfinance_intraday()
+            if now:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                # 如果最後一筆是今天 → 更新 close；否則追加一筆
+                if data[-1]["date"] == today_str:
+                    data[-1]["close"] = now
+                else:
+                    data.append({"date": today_str, "close": now})
+                src += " + yfinance(即時)"
+        except Exception as e:
+            print(f"即時價抓取失敗：{e}")
+    return data, src
 
 
 def analyze(data):
@@ -135,6 +165,31 @@ def load_state():
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text())
     return None
+
+
+def build_intraday_message(a, src):
+    """盤中精簡版（只看價 + 警報，不囉嗦看法）"""
+    arrow = "🔺" if a["chg"] > 0 else ("🔻" if a["chg"] < 0 else "➖")
+    tier, _ = tier_view(a["stretch"])
+    dd = a["discount"]
+
+    # 即時用 yfinance 抓盤中價時，date 可能是當天而非昨日
+    msg = f"""**☀️ 0050 盤中快報**
+
+**現價：{a['price']:.2f}** {arrow} {a['chg']:+.2f} ({a['chg_pct']:+.2f}%)
+市場溫度：{tier}　拉伸 {a['stretch']:+.1f}%
+距 52 週高：{dd:+.1f}%
+"""
+
+    if dd <= -25:
+        msg += f"\n🚨 **跌 {dd:.1f}%** — 閒錢 5-10 萬加碼區，盤後再確認"
+    elif dd <= -15:
+        msg += f"\n⚠️ **跌 {dd:.1f}%** — 閒錢 2-3 萬加碼區"
+    elif dd <= -10:
+        msg += f"\n👀 跌 {dd:.1f}%，靠近 -15% 加碼觸發"
+
+    msg += "\n_盤後 15:30 完整分析再來_"
+    return msg
 
 
 def build_message(a, src):
@@ -202,8 +257,9 @@ def build_message(a, src):
 
 
 def main():
-    print("抓 0050 資料...")
-    data, src = get_price_data()
+    intraday = "--intraday" in sys.argv
+    print(f"抓 0050 資料{'（含即時）' if intraday else ''}...")
+    data, src = get_price_data(intraday=intraday)
     if not data or len(data) < 200:
         print("⚠️ 資料不足 200 筆，無法計算 MA200")
         sys.exit(1)
@@ -211,7 +267,9 @@ def main():
 
     data = adjust_for_splits(data)
     a = analyze(data)
-    msg = build_message(a, src)
+
+    mode = "intraday" if "--intraday" in sys.argv else "close"
+    msg = build_intraday_message(a, src) if mode == "intraday" else build_message(a, src)
 
     print("\n" + "=" * 50)
     print(msg)

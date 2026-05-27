@@ -1,13 +1,23 @@
 name: 每日 0050 推播
 
-# 策略改為純 0050 DCA — 不再掃個股，只推 0050 收盤分析到 Discord
-# 原本 notify.py 多股掃描已停用（檔案保留供手動執行）
+# 純 0050 DCA 策略 — 每日推播兩次：
+#   - 盤中 12:00 TW (UTC 04:00)：即時快報，含警報
+#   - 盤後 15:30 TW (UTC 07:30)：完整技術面分析
 
 on:
   schedule:
-    # 台灣時間 15:30 收盤後（UTC 07:30），週一到五
-    - cron: '30 7 * * 1-5'
+    - cron: '0 4 * * 1-5'   # 12:00 TW 盤中快報
+    - cron: '30 7 * * 1-5'  # 15:30 TW 盤後完整版
   workflow_dispatch:
+    inputs:
+      mode:
+        description: '推播模式'
+        required: false
+        default: 'close'
+        type: choice
+        options:
+          - close
+          - intraday
 
 jobs:
   push_0050:
@@ -20,8 +30,26 @@ jobs:
       - name: 安裝依賴
         run: pip install requests pandas numpy yfinance
 
-      - name: 推播 0050 盤後分析
+      - name: 推播 0050
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python notify_0050.py
+        run: |
+          # cron schedule 用 UTC 時間判斷模式（4 點 = 盤中, 7 點 = 盤後）
+          # workflow_dispatch 用 input 判斷
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="${{ github.event.inputs.mode }}"
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "04" ]; then
+              MODE="intraday"
+            else
+              MODE="close"
+            fi
+          fi
+          echo "模式：$MODE"
+          if [ "$MODE" = "intraday" ]; then
+            python notify_0050.py --intraday
+          else
+            python notify_0050.py
+          fi
