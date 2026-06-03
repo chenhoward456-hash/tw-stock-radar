@@ -13,7 +13,7 @@
 """
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -172,28 +172,128 @@ def tw_now():
     return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%H:%M")
 
 
-def build_intraday_message(a, src):
-    """盤中精簡版（只看價 + 警報，不囉嗦看法）"""
+def fetch_us_overnight():
+    """美股隔夜引導：S&P / Nasdaq / 費半 / TSM ADR"""
+    import yfinance as yf
+    out = {}
+    for sym, label in [("^GSPC", "S&P"), ("^IXIC", "Nasdaq"), ("^SOX", "費半"), ("TSM", "台積 ADR")]:
+        try:
+            h = yf.Ticker(sym).history(period="2d")
+            if len(h) >= 2:
+                chg = (h["Close"].iloc[-1] / h["Close"].iloc[-2] - 1) * 100
+                out[label] = (float(h["Close"].iloc[-1]), chg)
+        except Exception:
+            pass
+    return out
+
+
+def fetch_taiex_now():
+    """加權指數最新（FinMind 日線最新筆）"""
+    import requests
+    r = requests.get(FINMIND, params={
+        "dataset": "TaiwanStockPrice", "data_id": "TAIEX",
+        "start_date": (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d"),
+        "end_date": datetime.now().strftime("%Y-%m-%d"),
+        "token": config.FINMIND_TOKEN,
+    }, timeout=15)
+    import pandas as pd
+    df = pd.DataFrame(r.json().get("data", []))
+    if len(df) < 2:
+        return None
+    cur = float(df["close"].iloc[-1])
+    prev = float(df["close"].iloc[-2])
+    return cur, (cur / prev - 1) * 100
+
+
+def fetch_institutional():
+    """三大法人對 0050 最新一日買賣超（淨額：億元）"""
+    import requests, pandas as pd
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+    r = requests.get(FINMIND, params={
+        "dataset": "TaiwanStockInstitutionalInvestorsBuySell", "data_id": "0050",
+        "start_date": start, "end_date": end,
+        "token": config.FINMIND_TOKEN,
+    }, timeout=15)
+    df = pd.DataFrame(r.json().get("data", []))
+    if df.empty:
+        return None
+    latest_date = df["date"].max()
+    last = df[df["date"] == latest_date].copy()
+    last["net"] = (last["buy"] - last["sell"]) / 1e8  # 億
+    foreign = last[last["name"] == "Foreign_Investor"]["net"].sum()
+    trust = last[last["name"] == "Investment_Trust"]["net"].sum()
+    dealer = last[last["name"].str.startswith("Dealer")]["net"].sum()
+    return latest_date, foreign, trust, dealer
+
+
+def fetch_volume_context(data):
+    """今日量 vs 60 日均量"""
+    vols = [d.get("Trading_Volume", 0) for d in data if "Trading_Volume" in d]
+    if len(vols) < 60:
+        return None
+    today_vol = vols[-1]
+    avg60 = sum(vols[-60:]) / 60
+    return today_vol, avg60, today_vol / avg60
+
+
+def build_intraday_message(a, src, data):
+    """盤中加料版：加上美股隔夜、加權、三大法人、量能"""
     arrow = "🔺" if a["chg"] > 0 else ("🔻" if a["chg"] < 0 else "➖")
     tier, _ = tier_view(a["stretch"])
     dd = a["discount"]
 
-    # 即時用 yfinance 抓盤中價時，date 可能是當天而非昨日
     msg = f"""**☀️ 0050 盤中快報** ｜ 送達 TW {tw_now()}
 
 **現價：{a['price']:.2f}** {arrow} {a['chg']:+.2f} ({a['chg_pct']:+.2f}%)
-市場溫度：{tier}　拉伸 {a['stretch']:+.1f}%
-距 52 週高：{dd:+.1f}%
+市場溫度：{tier}　拉伸 **{a['stretch']:+.1f}%**　距 52w 高 {dd:+.1f}%
 """
 
-    if dd <= -25:
-        msg += f"\n🚨 **跌 {dd:.1f}%** — 閒錢 5-10 萬加碼區，盤後再確認"
-    elif dd <= -15:
-        msg += f"\n⚠️ **跌 {dd:.1f}%** — 閒錢 2-3 萬加碼區"
-    elif dd <= -10:
-        msg += f"\n👀 跌 {dd:.1f}%，靠近 -15% 加碼觸發"
+    # 加權指數
+    taiex = fetch_taiex_now()
+    if taiex:
+        cur, chg = taiex
+        ta_arrow = "🔺" if chg > 0 else "🔻" if chg < 0 else "➖"
+        msg += f"\n**🇹🇼 加權**：{cur:,.0f} {ta_arrow} {chg:+.2f}%"
 
-    msg += "\n_盤後 15:30 完整分析再來_"
+    # 美股隔夜
+    us = fetch_us_overnight()
+    if us:
+        lines = []
+        for k in ["S&P", "Nasdaq", "費半", "台積 ADR"]:
+            if k in us:
+                p, c = us[k]
+                a_arr = "🔺" if c > 0 else "🔻" if c < 0 else "➖"
+                lines.append(f"{k} {a_arr}{c:+.2f}%")
+        msg += f"\n**🇺🇸 美股隔夜**：{' ｜ '.join(lines)}"
+
+    # 三大法人（前一日）
+    inst = fetch_institutional()
+    if inst:
+        date, f, t, d = inst
+        def fmt(x):
+            if abs(x) < 0.05:
+                return "持平"
+            sign = "買" if x >= 0 else "賣"
+            return f"{sign} {abs(x):.1f}億"
+        msg += f"\n**🏦 法人對 0050 ({date})**：外資 {fmt(f)} ｜ 投信 {fmt(t)} ｜ 自營 {fmt(d)}"
+
+    # 量能（FinMind 日線最新一筆，盤中時其實是前一日）
+    vol = fetch_volume_context(data)
+    if vol:
+        today_v, avg, ratio = vol
+        emoji = "🔥" if ratio > 1.5 else "📊" if ratio > 0.8 else "💤"
+        msg += f"\n**{emoji} 前一日量能**：{today_v/1e6:.0f}M vs 60日均 {avg/1e6:.0f}M（{ratio:.2f}x）"
+
+    # 警報
+    if dd <= -25:
+        msg += f"\n\n🚨 **跌 {dd:.1f}%** — 閒錢 5-10 萬加碼區（如果有的話）"
+    elif dd <= -15:
+        msg += f"\n\n⚠️ **跌 {dd:.1f}%** — 閒錢 2-3 萬加碼區（如果有的話）"
+    elif dd <= -10:
+        msg += f"\n\n👀 跌 {dd:.1f}%，靠近 -15% 加碼觸發"
+
+    msg += "\n\n_盤後再來完整 MA 分析與看法_"
     return msg
 
 
@@ -274,7 +374,7 @@ def main():
     a = analyze(data)
 
     mode = "intraday" if "--intraday" in sys.argv else "close"
-    msg = build_intraday_message(a, src) if mode == "intraday" else build_message(a, src)
+    msg = build_intraday_message(a, src, data) if mode == "intraday" else build_message(a, src)
 
     print("\n" + "=" * 50)
     print(msg)
