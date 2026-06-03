@@ -1,13 +1,14 @@
 name: 每日 0050 推播
 
-# 純 0050 DCA 策略 — 每日推播兩次：
-#   - 盤中 12:00 TW (UTC 04:00)：即時快報，含警報
-#   - 盤後 15:30 TW (UTC 07:30)：完整技術面分析
+# 純 0050 DCA 策略 — 每日推播兩次
+# GitHub Actions cron 整點/半點常延遲 3-5 小時，挑奇怪時間 + 提早當緩衝
+#   - 盤中：UTC 01:53（預期 TW 09:53，加延遲後落在 12-14 點）
+#   - 盤後：UTC 06:47（預期 TW 14:47，加延遲後落在 16-18 點）
 
 on:
   schedule:
-    - cron: '0 4 * * 1-5'   # 12:00 TW 盤中快報
-    - cron: '30 7 * * 1-5'  # 15:30 TW 盤後完整版
+    - cron: '53 1 * * 1-5'   # 盤中快報
+    - cron: '47 6 * * 1-5'   # 盤後完整版
   workflow_dispatch:
     inputs:
       mode:
@@ -40,8 +41,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MODE="${{ github.event.inputs.mode }}"
           else
-            HOUR=$(date -u +%H)
-            if [ "$HOUR" = "04" ]; then
+            # 判斷模式：用排程的「目標時段」而不是「實際起跑時間」
+            # 排程 cron 寫進 GITHUB_EVENT_PATH 的 schedule 欄位
+            CRON=$(jq -r .schedule "$GITHUB_EVENT_PATH" 2>/dev/null)
+            echo "排程 cron: $CRON"
+            if echo "$CRON" | grep -q "53 1"; then
               MODE="intraday"
             else
               MODE="close"

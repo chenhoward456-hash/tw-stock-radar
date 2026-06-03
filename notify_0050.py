@@ -167,6 +167,11 @@ def load_state():
     return None
 
 
+def tw_now():
+    from datetime import timezone, timedelta
+    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%H:%M")
+
+
 def build_intraday_message(a, src):
     """盤中精簡版（只看價 + 警報，不囉嗦看法）"""
     arrow = "🔺" if a["chg"] > 0 else ("🔻" if a["chg"] < 0 else "➖")
@@ -174,7 +179,7 @@ def build_intraday_message(a, src):
     dd = a["discount"]
 
     # 即時用 yfinance 抓盤中價時，date 可能是當天而非昨日
-    msg = f"""**☀️ 0050 盤中快報**
+    msg = f"""**☀️ 0050 盤中快報** ｜ 送達 TW {tw_now()}
 
 **現價：{a['price']:.2f}** {arrow} {a['chg']:+.2f} ({a['chg_pct']:+.2f}%)
 市場溫度：{tier}　拉伸 {a['stretch']:+.1f}%
@@ -203,7 +208,7 @@ def build_message(a, src):
     if a["price"] > a["ma200"]: above.append("MA200")
     pos = f"站上 {'/'.join(above)}" if above else "全部均線下方 ⚠️"
 
-    msg = f"""**📊 0050 每日盤後 ({a['date']})**
+    msg = f"""**📊 0050 每日盤後 ({a['date']})** ｜ 送達 TW {tw_now()}
 
 **💰 收盤：{a['price']:.2f}** {arrow} {a['chg']:+.2f} ({a['chg_pct']:+.2f}%)
 
