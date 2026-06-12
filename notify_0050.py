@@ -349,12 +349,11 @@ def build_message(a, src):
 """
 
     state = load_state()
-    if state:
+    if state and state.get("shares_owned"):
         sv = state["shares_owned"] * a["price"]
         msg += f"""
 **📦 你的部位**
 • 累計持股：{state['shares_owned']:.1f} 股（市值 {sv:,.0f}）
-• 戰備金：{state['reserve']:,.0f}
 """
 
     msg += f"\n_資料來源：{src} ｜ DCA 紀律 > 預測_"
