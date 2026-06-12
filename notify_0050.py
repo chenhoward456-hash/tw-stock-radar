@@ -20,7 +20,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config
-from notify import send_discord
+from discord_push import send_discord
 
 FINMIND = "https://api.finmindtrade.com/api/v4/data"
 STATE_FILE = Path(__file__).parent / "entry_signal_state.json"
